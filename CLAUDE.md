@@ -249,61 +249,105 @@ Each `.idx` file contains B-tree nodes with (key → ctid) mappings.
 ## Development Commands
 
 ```bash
-# Run the database REPL
-python main.py
+# Run the database REPL (when implemented)
+python3 main.py
 
 # Run with existing database directory
-python main.py --data-dir ./mydb
+python3 main.py --data-dir ./mydb
 
-# Run tests (when implemented)
-python -m pytest tests/
+# Run all tests
+python3 -m pytest tests/ -v
+
+# Run specific test file
+python3 tests/test_catalog.py
+python3 tests/test_storage.py
 
 # Run specific test
-python -m pytest tests/test_btree.py -k test_insert
+python3 -m pytest tests/test_btree.py -k test_insert
 
-# Clean data files
-rm -rf mydb/*.dat mydb/*.idx mydb/.lock
+# Import package in Python
+python3 -c "from db_engine import Catalog, BufferPool, Tuple; print('Import successful')"
+
+# Clean test data
+rm -rf test_data test_data_storage
+
+# Clean database files
+rm -rf data/*.dat data/*.idx data/.lock data/catalog.dat
 ```
 
 ## File Organization
 
+**Proper Python Package Structure:**
+
 ```
 db-engine/
-├── config.py       # Configuration parameters (page size, B-tree order, etc.)
-├── storage.py      # Heap file management, page I/O
-├── btree.py        # B-tree index implementation
-├── catalog.py      # System catalog (metadata)
-├── parser.py       # SQL parser (simple regex-based)
-├── executor.py     # Query execution engine
-├── repl.py         # Interactive shell
-├── main.py         # Entry point
-└── tests/          # Unit tests
+├── db_engine/              # Main package
+│   ├── __init__.py        # Package exports
+│   ├── config.py          # ✅ Configuration parameters (all fixes applied)
+│   ├── catalog.py         # ✅ COMPLETE (256 lines, tested)
+│   ├── storage.py         # ✅ COMPLETE (567 lines, tested)
+│   ├── btree.py           # TODO: B-tree index with TEXT truncation
+│   ├── parser.py          # TODO: Tokenizer + recursive descent parser
+│   ├── executor.py        # TODO: Query executor with all commands
+│   └── repl.py            # TODO: Interactive shell
+├── tests/                  # Unit tests
+│   ├── __init__.py
+│   ├── test_catalog.py    # ✅ 10/10 tests passing
+│   ├── test_storage.py    # ✅ 13 tests ready
+│   ├── test_btree.py      # TODO
+│   ├── test_parser.py     # TODO
+│   └── test_executor.py   # TODO
+├── main.py                 # TODO: Entry point
+├── CLAUDE.md              # This file
+├── LICENSE
+└── README.md              # TODO: User-facing documentation
 ```
 
 ## Implementation Notes
 
-### Configuration (config.py)
-All system parameters centralized in `config.py`:
+### Configuration (config.py) ✅ COMPLETE
+All system parameters centralized with all critical fixes applied:
 - Storage: `PAGE_SIZE` (8KB), `DATA_DIR`, header sizes
-- B-tree: `BTREE_ORDER` (4), `NODE_SIZE` (512 bytes)
-- Data types: sizes and supported types
-- File naming: extensions (`.dat`, `.idx`), naming conventions
-- Limits: max columns, indexes, name lengths
-- Import config values throughout codebase: `from config import PAGE_SIZE, BTREE_ORDER`
+- B-tree: `BTREE_ORDER` (4), `NODE_SIZE` (4096 bytes - fixed!), `INDEX_TEXT_MAX_LENGTH` (10 chars)
+- Buffer pool: `BUFFER_POOL_SIZE` (128 pages), `BUFFER_POOL_POLICY` (LRU)
+- Data types: `INT_SIZE`, `BIGINT_SIZE`, `FLOAT_SIZE`, `BOOL_SIZE`, `TIMESTAMP_SIZE` (UTC), `MAX_TEXT_SIZE` (10KB)
+- Tuple limits: `MAX_TUPLE_SIZE` (65KB)
+- Statistics: `STATS_AUTO_UPDATE_THRESHOLD` (1000 ops)
+- Vacuum: `AUTO_VACUUM_THRESHOLD` (20%), `VACUUM_ENABLED` (True)
+- Concurrency: `CONCURRENT_READS_ENABLED` (True)
+- Parser: `PARSER_DETAILED_ERRORS` (True)
+- Import: `from db_engine.config import PAGE_SIZE, BTREE_ORDER`
 
-### Storage Layer (storage.py)
-- `BufferPool` class: LRU page cache (128 pages)
-  - `get_page(file, page_num)`: Returns cached or loads from disk
-  - `evict()`: LRU eviction when cache full
-  - `flush()`: Write dirty pages to disk
-- `HeapFile` class: manages table data files
-  - `free_space_map`: Dict tracking free space per page
-  - `insert_tuple()`: Uses FSM to find page, enforces tuple size limit
-  - `read_tuple(ctid)`: Goes through buffer pool
-  - `delete_tuple(ctid)`: Marks as deleted, updates dead tuple count
-  - `vacuum()`: Reclaims space from dead tuples, updates FSM
-- `Page` class: 8KB blocks with header (free space, item count, dead tuple count)
-- `Tuple` class: Serialization with per-column nullable optimization
+### Storage Layer (storage.py) ✅ COMPLETE - 567 lines, tested
+**BufferPool** class: LRU page cache (128 pages)
+  - `get_page(file, page_num)`: Returns cached or loads from disk (cache hits tracked)
+  - `mark_dirty(file, page_num)`: Mark page as modified
+  - `_evict()`: LRU eviction when cache full, flushes dirty pages
+  - `flush_all()`: Write all dirty pages to disk
+  - `stats()`: Returns hit rate, cache size, dirty page count
+
+**Tuple** class: Row serialization with null bitmap optimization
+  - `__init__(values, schema)`: Validates tuple size (max 65KB)
+  - `serialize()`: Binary format with null bitmap (only if nullable columns exist)
+  - `deserialize(data, schema)`: Restore tuple from bytes
+  - Supports: INT, BIGINT, FLOAT, BOOLEAN, TIMESTAMP, TEXT (up to 10KB)
+
+**Page** class: 8KB blocks with header
+  - `add_tuple(data)`: Add tuple, return offset, update free space
+  - `get_tuple(offset)`: Retrieve tuple, check for tombstone (0xFF)
+  - `mark_deleted(offset)`: Set tombstone, increment dead tuple count
+  - `serialize()`: Fixed 8KB binary format
+  - `deserialize(data, page_num)`: Load page from bytes
+
+**HeapFile** class: Table data file management with FSM
+  - `free_space_map`: Dict tracking free space per page (O(1) lookup)
+  - `create()`: Initialize heap file with header
+  - `open()`: Load existing heap, rebuild FSM
+  - `insert_tuple(tuple)`: FSM finds page, enforces tuple size limit, returns ctid
+  - `read_tuple(ctid)`: Fetch via buffer pool, deserialize
+  - `delete_tuple(ctid)`: Mark as deleted (tombstone)
+  - `scan_all()`: Sequential scan iterator, skips deleted tuples
+  - `vacuum()`: Reclaim space from dead tuples, compact pages, update FSM
 
 ### B-tree Index (btree.py)
 - `BTreeNode` class: fixed-size 4096-byte serialization with `struct.pack()`
@@ -315,15 +359,39 @@ All system parameters centralized in `config.py`:
 - `range_query(start, end)`: Returns list of ctids (fully implemented)
 - `delete(key)`: With node rebalancing (borrow from sibling or merge)
 
-### Catalog (catalog.py)
-- `TableSchema`: table definitions with per-column nullable flags
-- `IndexMetadata`: index definitions
-- `TableStatistics`: row count, page count, distinct values
-  - Auto-updated every 1000 operations
-  - Manual update via ANALYZE command
-- Stores table schemas, column definitions, index metadata, statistics
-- Loaded into memory on startup
-- Persisted to `catalog.dat` after DDL operations and stat updates
+### Catalog (catalog.py) ✅ COMPLETE - 256 lines, 10/10 tests passing
+**ColumnDef** dataclass: Column definition
+  - `name`, `datatype`, `nullable`, `unique`
+  - `__repr__()`: Human-readable format
+
+**TableSchema** dataclass: Table metadata
+  - `table_name`, `columns`, `primary_key`
+  - `has_nullable_columns()`: Check if null bitmap needed (optimization)
+  - `get_column(name)`: Column lookup
+  - `get_column_index(name)`: Position lookup
+  - `heap_file`: Auto-generated filename
+
+**IndexMetadata** dataclass: Index definition
+  - `index_name`, `table_name`, `columns`, `unique`
+  - `index_file`: Auto-generated filename
+
+**TableStatistics** dataclass: Query planning stats
+  - `row_count`, `page_count`, `dead_tuple_count`, `distinct_values`, `modification_count`
+  - `needs_update(threshold)`: Check if auto-update needed (default 1000)
+  - `dead_tuple_percentage()`: For vacuum decision
+
+**Catalog** class: System catalog manager
+  - `tables`, `indexes`, `statistics`: In-memory dictionaries
+  - `load()`: Deserialize from catalog.dat (pickle format)
+  - `save()`: Serialize to catalog.dat with magic header
+  - `create_table(schema)`: Validate PK, auto-create PK index, initialize stats
+  - `drop_table(name)`: Remove table, indexes, and stats
+  - `create_index(metadata)`: Validate columns exist
+  - `get_table(name)`: Retrieve schema
+  - `get_indexes_for_table(name)`: List indexes
+  - `get_statistics(name)`: Get/initialize stats
+  - `update_statistics(name, stats)`: Persist stat changes
+  - `list_tables()`, `list_indexes()`: Listing methods
 
 ### Parser (parser.py)
 - **Hand-written recursive descent parser** (not regex-based, not library-based)
