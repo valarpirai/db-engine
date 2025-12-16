@@ -20,14 +20,27 @@ HEAP_FILE_HEADER_SIZE = 32  # bytes
 PAGE_HEADER_SIZE = 16  # bytes (free_space, item_count, flags)
 
 # ============================================================================
+# Buffer Pool Configuration
+# ============================================================================
+
+# Buffer pool size (number of pages to cache in memory)
+BUFFER_POOL_SIZE = 128  # 128 pages = 1MB cache (128 * 8KB)
+
+# Buffer pool eviction policy
+BUFFER_POOL_POLICY = 'LRU'  # Least Recently Used
+
+# ============================================================================
 # B-tree Index Configuration
 # ============================================================================
 
 # B-tree order (max children per internal node)
 BTREE_ORDER = 4  # ORDER-1 = max keys per node
 
-# Fixed size for each B-tree node
-NODE_SIZE = 512  # bytes
+# Fixed size for each B-tree node (increased to handle variable-length keys)
+NODE_SIZE = 4096  # bytes (was 512, increased to support TEXT keys)
+
+# Index key truncation for TEXT columns
+INDEX_TEXT_MAX_LENGTH = 10  # Only first 10 chars of TEXT used in indexes
 
 # Index file header size (metadata at start of each .idx file)
 INDEX_FILE_HEADER_SIZE = 32  # bytes (magic, root_offset, node_count)
@@ -47,13 +60,16 @@ BOOL_SIZE = 1       # 1 byte
 TIMESTAMP_SIZE = 8  # 8 bytes (Unix timestamp as 64-bit integer)
 
 # Variable-size data types
-MAX_TEXT_SIZE = 255  # Maximum string length (for simplicity)
+MAX_TEXT_SIZE = 10240  # Maximum string length (10KB)
 
 # Supported data types
 SUPPORTED_TYPES = ['INT', 'BIGINT', 'FLOAT', 'TEXT', 'BOOLEAN', 'TIMESTAMP']
 
 # NULL support
-NULL_BITMAP_ENABLED = True  # Use null bitmap in tuple serialization
+NULL_BITMAP_ENABLED = True  # Use null bitmap in tuple serialization (only if nullable columns exist)
+
+# Tuple size limits
+MAX_TUPLE_SIZE = 65535  # Maximum tuple size in bytes (64KB - 1)
 
 # ============================================================================
 # Catalog Configuration
@@ -66,6 +82,25 @@ CATALOG_FILE = 'catalog.dat'
 CATALOG_MAGIC = b'CTLG'
 
 # ============================================================================
+# Statistics Configuration
+# ============================================================================
+
+# Auto-update statistics frequency (number of INSERT/DELETE operations)
+STATS_AUTO_UPDATE_THRESHOLD = 1000  # Update stats every 1000 modifications
+
+# Statistics tracked per table
+STATS_TRACK_ROW_COUNT = True
+STATS_TRACK_PAGE_COUNT = True
+STATS_TRACK_DISTINCT_VALUES = True  # For indexed columns
+
+# ============================================================================
+# Timestamp Configuration
+# ============================================================================
+
+# All timestamps stored as UTC (Unix epoch seconds)
+TIMESTAMP_TIMEZONE = 'UTC'  # All timestamps are in UTC
+
+# ============================================================================
 # Concurrency Configuration
 # ============================================================================
 
@@ -74,6 +109,9 @@ LOCK_FILE = '.lock'
 
 # Lock acquisition timeout (seconds)
 LOCK_TIMEOUT = 30
+
+# Support concurrent reads (multiple readers, single writer)
+CONCURRENT_READS_ENABLED = True
 
 # ============================================================================
 # Transaction Configuration
@@ -115,6 +153,26 @@ MAX_COLUMN_NAME_LEN = 64
 
 # Maximum index name length
 MAX_INDEX_NAME_LEN = 64
+
+# ============================================================================
+# Vacuum/Garbage Collection Configuration
+# ============================================================================
+
+# Auto-vacuum threshold (percentage of dead tuples)
+AUTO_VACUUM_THRESHOLD = 20  # Vacuum when 20% of tuples are dead
+
+# Vacuum reclaims space from deleted tuples
+VACUUM_ENABLED = True
+
+# ============================================================================
+# Parser Configuration
+# ============================================================================
+
+# Parser error messages include line and column numbers
+PARSER_DETAILED_ERRORS = True
+
+# Maximum SQL statement length
+MAX_SQL_LENGTH = 65536  # 64KB
 
 # ============================================================================
 # Debug and Logging

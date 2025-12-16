@@ -14,15 +14,20 @@ This is an educational database engine built from scratch in Python, inspired by
 - **Heap files** store actual table data in 8KB fixed-size pages
 - Each row assigned a **ctid** (block_number, tuple_offset) - PostgreSQL-style tuple identifier
 - **Tuple format with null bitmap**: Supports NULL values efficiently
-  - Null bitmap: 1 bit per column (1 = NULL, 0 = not NULL)
+  - Null bitmap used only if table has nullable columns (per-column nullable flag optimization)
+  - Null bitmap: 1 bit per nullable column (1 = NULL, 0 = not NULL)
   - Only non-NULL values are serialized after the bitmap
+  - **Maximum tuple size**: 65,535 bytes (enforced with error check)
+- **Buffer Pool**: LRU page cache (128 pages = 1MB) to avoid excessive disk I/O
+- **Free Space Map (FSM)**: Tracks which pages have available space for efficient insertion
 - File format: `tablename.dat` for heap, `tablename_indexname.idx` for indexes
 - Binary serialization using Python's `struct` module for fixed-size data structures
 
 ### Indexing (B-tree)
 - Single implementation: B-tree indexes only (no hash, GiST, GIN, etc.)
 - Structure: Internal nodes (keys + child pointers), Leaf nodes (keys + ctid pointers)
-- Fixed-size nodes (e.g., 512 bytes) stored in index files
+- **Fixed-size nodes: 4096 bytes** (increased from 512 to handle variable-length keys)
+- **TEXT key truncation**: Only first 10 characters of TEXT columns used in indexes (configurable)
 - Index files have metadata header: magic number, root offset, node count
 - **Supports composite keys** (multi-column indexes): keys stored as tuples
 - Operations: insertion with splitting, single-key lookup, range queries, deletion with rebalancing
@@ -32,6 +37,12 @@ This is an educational database engine built from scratch in Python, inspired by
 ### Catalog System
 - Metadata stored in `catalog.dat`: tables, columns, indexes
 - Tracks: table_id, table_name, column definitions, index definitions
+- **Statistics tracking**:
+  - Row count per table
+  - Page count per table
+  - Distinct value counts for indexed columns
+  - Auto-updated every 1000 modifications
+  - Manual update via `ANALYZE table` command
 - Loaded on startup, updated on DDL operations
 
 ### SQL Support
@@ -56,12 +67,24 @@ CREATE TABLE orders (
 INSERT INTO users VALUES (1, 'alice@example.com', 'Alice', 25, 1704067200);
 INSERT INTO users (id, name) VALUES (2, 'Bob');  -- Other columns NULL
 
+-- UPDATE (Phase 1)
+UPDATE users SET age = 26 WHERE id = 1;
+UPDATE users SET age = age + 1 WHERE age > 20;
+
 -- SELECT with complex WHERE clauses
 SELECT * FROM users WHERE age > 18;
 SELECT name, email FROM users WHERE age BETWEEN 20 AND 30;
 SELECT * FROM users WHERE (age > 20 AND age < 30) OR name = 'Bob';
 SELECT * FROM users WHERE name LIKE 'Al%';
 SELECT * FROM users WHERE email IS NOT NULL;
+
+-- LIMIT and OFFSET (pagination)
+SELECT * FROM users LIMIT 10;
+SELECT * FROM users LIMIT 10 OFFSET 20;
+
+-- ORDER BY
+SELECT * FROM users ORDER BY age DESC;
+SELECT * FROM users ORDER BY name ASC, age DESC;
 
 -- DELETE
 DELETE FROM users WHERE id = 1;
@@ -73,6 +96,23 @@ CREATE INDEX idx_composite ON orders(user_id, order_id);
 
 -- DROP TABLE
 DROP TABLE users;
+
+-- EXPLAIN (query plan inspection - Phase 1)
+EXPLAIN SELECT * FROM users WHERE age > 18;
+-- Output: shows scan method (index/sequential), estimated rows, etc.
+
+-- VACUUM (garbage collection - Phase 1)
+VACUUM users;  -- Reclaim space from deleted tuples
+VACUUM;        -- Vacuum all tables
+
+-- ANALYZE (update statistics - Phase 1)
+ANALYZE users;  -- Update table statistics
+ANALYZE;        -- Analyze all tables
+
+-- ALTER TABLE (Phase 2)
+ALTER TABLE users ADD COLUMN phone TEXT;
+ALTER TABLE users DROP COLUMN phone;
+ALTER TABLE users RENAME COLUMN name TO full_name;
 ```
 
 **Constraint support:**
@@ -83,18 +123,21 @@ DROP TABLE users;
 - No FOREIGN KEY support
 
 ### Query Execution
-- **Sequential scan**: Read all pages from heap file
-- **Index scan**: Use B-tree to locate specific rows by ctid
+- **Sequential scan**: Read all pages from heap file (with buffer pool caching)
+- **Index scan**: Use B-tree for equality/range lookups, fetch tuples by ctid (fully implemented)
 - **Cost-based query planning**: Automatically chooses between index scan and sequential scan based on:
-  - Table size
-  - Index availability
+  - Table statistics (row count, page count from catalog)
+  - Index availability and selectivity
   - WHERE clause structure (can index be used?)
-  - Estimated selectivity
+  - Estimated I/O cost (index + heap vs full table scan)
 - **WHERE clause evaluation**: Full boolean expression support
   - Comparison operators: `=`, `!=`, `<`, `>`, `<=`, `>=`
   - Boolean logic: `AND`, `OR`, `NOT` with proper precedence
   - Parentheses for grouping: `(age > 20 AND age < 30) OR status = 'active'`
   - Pattern matching: `LIKE` operator (`%` wildcard, `_` single char)
+- **Result ordering**: ORDER BY with ASC/DESC on multiple columns
+- **Pagination**: LIMIT and OFFSET support
+- **Query introspection**: EXPLAIN command shows query plan and cost estimates
 
 ### Transaction Model (Phase 2 - Future)
 - **Phase 1**: Auto-commit all operations (no explicit transactions)
@@ -121,10 +164,14 @@ Supported types:
 - `INT`: 4-byte signed integer (32-bit)
 - `BIGINT`: 8-byte signed integer (64-bit)
 - `FLOAT`: 8-byte double precision floating point
-- `TEXT`: Variable-length string (max 255 chars for simplicity)
+- `TEXT`: Variable-length string (max 10KB = 10,240 bytes)
+  - Note: When used in indexes, only first 10 characters are indexed
 - `BOOLEAN`: 1-byte boolean
 - `TIMESTAMP`: 8-byte Unix timestamp (seconds since epoch)
-- **NULL support**: All columns can be NULL unless marked NOT NULL (using null bitmap in tuple serialization)
+  - **All timestamps stored as UTC** - no timezone conversion
+  - Application responsible for timezone handling
+- **NULL support**: All columns can be NULL unless marked NOT NULL
+  - Null bitmap optimization: only used if table has nullable columns
 
 ## Key Design Decisions
 
@@ -146,6 +193,40 @@ Supported types:
 6. **Uniqueness via B-tree**: Primary keys enforce uniqueness during insertion
 
 7. **Rebalancing on delete**: Properly maintain B-tree properties (borrow/merge)
+
+8. **Buffer pool for performance**: LRU page cache (128 pages) to minimize disk I/O
+   - Every page read goes through buffer pool first
+   - Reduces disk seeks for frequently accessed data
+
+9. **Free Space Map (FSM)**: Track page free space for O(1) insertion
+   - Avoids scanning all pages to find space
+   - Updated on insert/delete operations
+
+10. **Statistics-driven cost estimation**: Catalog stores table/index statistics
+   - Row count, page count, distinct values
+   - Auto-updated every 1000 modifications
+   - Used by query planner for index vs sequential scan decisions
+
+11. **TEXT key truncation in indexes**: Only first 10 chars indexed
+   - Allows fixed-size B-tree nodes (4096 bytes) to work with variable-length keys
+   - Full text still stored in heap, only index keys truncated
+
+12. **Tuple size limit**: Maximum 65,535 bytes per row
+   - Enforced during INSERT/UPDATE
+   - Prevents memory/performance issues
+
+13. **Per-column nullable optimization**: Null bitmap only if needed
+   - Tables with no nullable columns skip bitmap entirely
+   - Saves space for NOT NULL tables
+
+14. **Concurrent reads**: Multiple readers allowed, single writer
+   - Read/write locks using fcntl
+   - Better concurrency than full table locking
+
+15. **Vacuum for space reclamation**: VACUUM command in Phase 1
+   - Reclaims space from deleted tuples
+   - Auto-vacuum when 20% of tuples are dead
+   - Prevents table bloat
 
 ## Database File Structure
 
@@ -211,74 +292,212 @@ All system parameters centralized in `config.py`:
 - Import config values throughout codebase: `from config import PAGE_SIZE, BTREE_ORDER`
 
 ### Storage Layer (storage.py)
+- `BufferPool` class: LRU page cache (128 pages)
+  - `get_page(file, page_num)`: Returns cached or loads from disk
+  - `evict()`: LRU eviction when cache full
+  - `flush()`: Write dirty pages to disk
 - `HeapFile` class: manages table data files
-- `Page` class: 8KB blocks with header (free space, item count)
-- `insert_tuple()`: Finds page with space, appends tuple, returns ctid
-- `read_tuple(ctid)`: Reads tuple by (block_number, offset)
-- `delete_tuple(ctid)`: Marks tuple as deleted (tombstone)
+  - `free_space_map`: Dict tracking free space per page
+  - `insert_tuple()`: Uses FSM to find page, enforces tuple size limit
+  - `read_tuple(ctid)`: Goes through buffer pool
+  - `delete_tuple(ctid)`: Marks as deleted, updates dead tuple count
+  - `vacuum()`: Reclaims space from dead tuples, updates FSM
+- `Page` class: 8KB blocks with header (free space, item count, dead tuple count)
+- `Tuple` class: Serialization with per-column nullable optimization
 
 ### B-tree Index (btree.py)
-- `BTreeNode` class: fixed-size serialization with `struct.pack()`
+- `BTreeNode` class: fixed-size 4096-byte serialization with `struct.pack()`
+  - TEXT key truncation to 10 chars
+  - Composite key support (stored as tuples)
 - `BTreeIndex` class: manages index file, root node, metadata
 - `insert(key, ctid)`: With uniqueness check for primary keys
 - `search(key)`: Returns ctid or None
-- `range_query(start, end)`: Returns list of ctids
+- `range_query(start, end)`: Returns list of ctids (fully implemented)
 - `delete(key)`: With node rebalancing (borrow from sibling or merge)
 
 ### Catalog (catalog.py)
-- Stores table schemas, column definitions, index metadata
+- `TableSchema`: table definitions with per-column nullable flags
+- `IndexMetadata`: index definitions
+- `TableStatistics`: row count, page count, distinct values
+  - Auto-updated every 1000 operations
+  - Manual update via ANALYZE command
+- Stores table schemas, column definitions, index metadata, statistics
 - Loaded into memory on startup
-- Persisted to `catalog.dat` after DDL operations
+- Persisted to `catalog.dat` after DDL operations and stat updates
 
 ### Parser (parser.py)
 - **Hand-written recursive descent parser** (not regex-based, not library-based)
 - Two-phase parsing:
   1. **Tokenizer**: Lexical analysis - converts SQL string to tokens (keywords, identifiers, literals, operators)
   2. **Parser**: Syntax analysis - converts tokens to command objects with proper precedence
-- Returns structured command objects: CreateTable, Insert, Select, Delete, CreateIndex
+- Returns structured command objects: CreateTable, Insert, Update, Select, Delete, CreateIndex, Explain, Vacuum, Analyze, AlterTable
 - Expression tree for WHERE clauses supporting boolean logic (AND/OR/NOT, parentheses)
+- **Detailed error messages**: Line and column numbers, helpful suggestions
 - Better error messages than regex approach
 - More educational than using external library
 
 ### Executor (executor.py)
 - Orchestrates catalog, storage, and indexes
 - `execute_create_table()`: Creates heap file, updates catalog, auto-creates primary key index
-- `execute_insert()`: Validates constraints (PK uniqueness, NOT NULL, UNIQUE), writes to heap, updates all indexes
-- `execute_select()`: Cost-based scan method selection (index or sequential), evaluates WHERE clause, projects columns
-- `execute_delete()`: Removes from heap and all indexes
+- `execute_insert()`: Validates constraints (PK uniqueness, NOT NULL, UNIQUE), checks tuple size, writes to heap, updates all indexes, updates stats
+- `execute_update()`: Validates constraints, finds matching tuples, updates heap and indexes (Phase 1)
+- `execute_select()`:
+  - Cost-based scan method selection using table statistics
+  - Index scan: `range_query()` for ranges, `search()` for equality
+  - Sequential scan: through buffer pool
+  - ORDER BY: sorts results
+  - LIMIT/OFFSET: pagination support
+- `execute_delete()`: Removes from heap and all indexes, updates dead tuple count
 - `execute_create_index()`: Creates index file, populates from existing data
+- `execute_explain()`: Shows query plan, estimated cost, scan method (Phase 1)
+- `execute_vacuum()`: Calls `heap_file.vacuum()`, reclaims space, updates stats
+- `execute_analyze()`: Updates table statistics in catalog
+- `execute_alter_table()`: ADD/DROP/RENAME columns (Phase 2)
+- `_choose_scan_method()`: Uses table statistics for cost estimation
+- `_index_scan()`: Fully implemented - extracts key from WHERE, uses B-tree, fetches by ctid
 - `_evaluate_expression()`: Recursive WHERE clause evaluation with full boolean logic support
 - `_like_match()`: Pattern matching for LIKE operator
 
 ## Excluded Features (Out of Scope)
 
+### Never Implementing (Too Complex for Educational DB):
 - MVCC (multi-version concurrency control)
-- Write-ahead logging (WAL)
-- Crash recovery
-- Advanced query optimization (we have simple cost-based planning)
+- Write-ahead logging (WAL) and crash recovery
 - JOINs (multi-table queries)
 - Aggregations (SUM, COUNT, AVG, GROUP BY, HAVING)
 - Subqueries, views, triggers, stored procedures
-- UPDATE statement (Phase 2)
 - User authentication and permissions
 - Network protocol (always local file access, no client-server)
 - Replication
-- Vacuum/compaction (garbage collection)
 - FOREIGN KEY constraints
+- Advanced query optimization (partial index scans, hash joins, etc.)
+
+### Phase 2 Features (Added After Core Works):
+- ALTER TABLE (add/drop/rename columns)
+- Explicit transactions (BEGIN/COMMIT/ROLLBACK)
+- More data types (DATE, TIME, JSON, etc.)
+
+## Implementation Approach
+
+**Foundation First with Early Integration**
+
+### Phase 1: Core Foundation (Bottom-Up with Unit Tests)
+Build and thoroughly test each layer independently:
+
+1. **config.py** ✓ - Configuration parameters
+2. **catalog.py** - Metadata system with statistics
+   - Unit test: save/load schemas, statistics updates
+3. **storage.py** - Tuple, Page, HeapFile, BufferPool, FSM
+   - Unit test: insert/read/delete tuples, buffer pool caching, FSM tracking
+4. **btree.py** - BTreeNode, BTreeIndex with TEXT truncation
+   - Unit test: insert/search/delete, node splitting/merging, composite keys
+
+**Goal**: Each component works independently with comprehensive unit tests.
+
+### Phase 2: Early Integration Testing
+Before building the full interface, verify components work together:
+
+5. **Integration test script** (simple Python, not full REPL):
+   ```python
+   # test_integration.py
+   catalog.create_table(schema)
+   heap.insert_tuple(tuple)  # Goes through buffer pool
+   index.insert(key, ctid)
+   found_ctid = index.search(key)
+   tuple = heap.read_tuple(found_ctid)  # From cache
+   assert tuple.values == expected
+   ```
+
+**Goal**: Verify buffer pool, FSM, indexes, and storage all connect properly.
+
+### Phase 3: User Interface Layer (Top-Down)
+Build the interactive components on top of tested foundation:
+
+6. **parser.py** - Tokenizer, Parser, Command objects (all SQL commands)
+7. **executor.py** - QueryExecutor with all execute methods
+8. **repl.py** - Interactive shell with meta-commands
+9. **main.py** - Entry point with argument parsing
+
+**Goal**: End-to-end working database with REPL interface.
+
+### Phase 4: Final Integration & Testing
+10. End-to-end SQL tests through REPL
+11. Performance testing with larger datasets
+12. Edge case testing (NULL values, large tuples, many indexes)
+13. Vacuum and statistics testing
 
 ## Testing Strategy
 
-Focus on unit tests for each component:
-- `test_btree.py`: Insert, search, split, delete, rebalance
-- `test_storage.py`: Page management, tuple insertion, ctid addressing
-- `test_executor.py`: End-to-end SQL command execution
-- `test_catalog.py`: Metadata persistence
+### Unit Tests (Phase 1)
 
-## Future Extensions (When Core is Solid)
+**tests/test_buffer_pool.py**
+- Page caching and eviction (LRU)
+- Dirty page tracking and flushing
+- Cache hit/miss statistics
 
-1. Add MVCC with xmin/xmax transaction IDs
-2. Implement write-ahead logging for durability
-3. Support composite indexes (multi-column)
-4. Add JOIN operations (nested loop initially)
-5. Simple query optimizer (cost-based index selection)
-6. Network protocol (PostgreSQL wire protocol subset)
+**tests/test_storage.py**
+- Tuple serialization with null bitmap optimization
+- Page management and FSM updates
+- HeapFile insert/read/delete with tuple size validation
+- Vacuum space reclamation
+- ctid addressing correctness
+
+**tests/test_btree.py**
+- Node serialization with TEXT truncation (4096 bytes)
+- Insert with splitting (including root split)
+- Search (exact match and not found)
+- Range queries with leaf linking
+- Delete with rebalancing (borrow and merge)
+- Uniqueness enforcement (PRIMARY KEY, UNIQUE)
+- Composite keys (multi-column indexes)
+
+**tests/test_catalog.py**
+- Save/load catalog with statistics
+- Create/drop table
+- Create index
+- Schema validation
+- Statistics auto-update (every 1000 ops)
+- ANALYZE command
+
+### Integration Tests (Phase 2)
+
+**tests/test_integration.py**
+- Buffer pool used by HeapFile reads
+- FSM tracks page free space correctly
+- Index and heap work together (insert → search → fetch)
+- Statistics influence cost estimation
+- Concurrent reads (multiple file handles)
+
+### End-to-End Tests (Phase 3)
+
+**tests/test_parser.py**
+- Tokenization (all SQL keywords, operators)
+- Parse all supported SQL commands
+- Error messages with line/column numbers
+- Expression precedence (AND/OR/NOT, parentheses)
+
+**tests/test_executor.py**
+- CREATE TABLE → INSERT → SELECT → UPDATE → DELETE flow
+- PRIMARY KEY uniqueness enforcement
+- NOT NULL and UNIQUE constraint enforcement
+- WHERE clause evaluation (all operators, LIKE)
+- ORDER BY and LIMIT/OFFSET
+- Index vs sequential scan selection (verify uses statistics)
+- EXPLAIN command output
+- VACUUM reclaims space
+- ANALYZE updates statistics
+- Composite indexes used correctly
+
+**tests/test_repl.py**
+- Meta-commands (\dt, \di, \d table, \q)
+- Multi-line SQL input
+- Result formatting
+- Error handling
+
+### Performance Tests (Phase 4)
+
+**tests/test_performance.py**
+- Insert 10,000 rows, verify buffer pool reduces I/O
+- Sequential scan vs index scan comparison
+- Vacuum performance on heavily deleted table
+- Statistics accuracy with large datasets
