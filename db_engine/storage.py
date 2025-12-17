@@ -331,15 +331,17 @@ class Page:
         - Dead tuple count: 2 bytes
         - Reserved: 10 bytes
 
-        [Tuple data: rest of page]
+        [For each tuple: offset(4) + length(4) + data(variable)]
         """
         # Header
         header = struct.pack('HHH', self.free_space, len(self.tuples), self.dead_tuple_count)
         header += b'\x00' * 10  # Reserved space
 
-        # Tuple data
+        # Tuple data with lengths
         data = header
         for offset, tuple_data in self.tuples:
+            data += struct.pack('I', offset)  # 4 bytes for offset
+            data += struct.pack('I', len(tuple_data))  # 4 bytes for length
             data += tuple_data
 
         # Pad to PAGE_SIZE
@@ -359,14 +361,23 @@ class Page:
         page.dead_tuple_count = dead_tuple_count
 
         # Read tuples
-        offset = PAGE_HEADER_SIZE
+        pos = PAGE_HEADER_SIZE
         for _ in range(tuple_count):
-            # Find tuple boundaries (this is simplified - in reality we'd store tuple lengths)
-            # For now, we reconstruct from free space
-            pass
+            # Read offset
+            tuple_offset = struct.unpack('I', data[pos:pos+4])[0]
+            pos += 4
 
-        # TODO: Better tuple boundary detection
-        # For now, this is a simplified version
+            # Read length
+            tuple_length = struct.unpack('I', data[pos:pos+4])[0]
+            pos += 4
+
+            # Read tuple data
+            tuple_data = data[pos:pos+tuple_length]
+            pos += tuple_length
+
+            # Add to page
+            page.tuples.append((tuple_offset, tuple_data))
+
         return page
 
     def write_to_disk(self, file_path: str):
@@ -419,7 +430,7 @@ class HeapFile:
         """Rebuild free space map by scanning all pages"""
         self.free_space_map = {}
         for page_num in range(self.page_count):
-            page = self._read_page_direct(page_num)
+            page = self._read_page_direct(self.file_path, page_num)
             self.free_space_map[page_num] = page.free_space
 
     def insert_tuple(self, tuple: Tuple) -> TupleType[int, int]:
