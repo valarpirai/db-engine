@@ -17,6 +17,7 @@ from db_engine.parser import (
     ExplainCommand, AnalyzeCommand, VacuumCommand,
     Expression, BinaryOp, UnaryOp, Literal, ColumnRef
 )
+from db_engine.executor import QueryExecutor
 
 __all__ = [
     'Catalog', 'TableSchema', 'ColumnDef', 'IndexMetadata', 'TableStatistics',
@@ -26,5 +27,6 @@ __all__ = [
     'SelectCommand', 'InsertCommand', 'UpdateCommand', 'DeleteCommand',
     'CreateTableCommand', 'CreateIndexCommand', 'DropTableCommand',
     'ExplainCommand', 'AnalyzeCommand', 'VacuumCommand',
-    'Expression', 'BinaryOp', 'UnaryOp', 'Literal', 'ColumnRef'
+    'Expression', 'BinaryOp', 'UnaryOp', 'Literal', 'ColumnRef',
+    'QueryExecutor'
 ]
