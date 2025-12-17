@@ -18,6 +18,7 @@ from db_engine.parser import (
     Expression, BinaryOp, UnaryOp, Literal, ColumnRef
 )
 from db_engine.executor import QueryExecutor
+from db_engine.repl import REPL
 
 __all__ = [
     'Catalog', 'TableSchema', 'ColumnDef', 'IndexMetadata', 'TableStatistics',
@@ -28,5 +29,6 @@ __all__ = [
     'CreateTableCommand', 'CreateIndexCommand', 'DropTableCommand',
     'ExplainCommand', 'AnalyzeCommand', 'VacuumCommand',
     'Expression', 'BinaryOp', 'UnaryOp', 'Literal', 'ColumnRef',
-    'QueryExecutor'
+    'QueryExecutor',
+    'REPL'
 ]
