@@ -46,6 +46,15 @@ class TokenType(Enum):
     BY = auto()
     ASC = auto()
     DESC = auto()
+    ALTER = auto()
+    ADD = auto()
+    COLUMN = auto()
+    RENAME = auto()
+    TO = auto()
+    BEGIN = auto()
+    COMMIT = auto()
+    ROLLBACK = auto()
+    TRANSACTION = auto()
 
     # Data types
     INT = auto()
@@ -131,6 +140,15 @@ class Tokenizer:
         'BY': TokenType.BY,
         'ASC': TokenType.ASC,
         'DESC': TokenType.DESC,
+        'ALTER': TokenType.ALTER,
+        'ADD': TokenType.ADD,
+        'COLUMN': TokenType.COLUMN,
+        'RENAME': TokenType.RENAME,
+        'TO': TokenType.TO,
+        'BEGIN': TokenType.BEGIN,
+        'COMMIT': TokenType.COMMIT,
+        'ROLLBACK': TokenType.ROLLBACK,
+        'TRANSACTION': TokenType.TRANSACTION,
         'INT': TokenType.INT,
         'BIGINT': TokenType.BIGINT,
         'FLOAT': TokenType.FLOAT,
@@ -456,6 +474,49 @@ class VacuumCommand:
     table_name: Optional[str]  # None means all tables
 
 
+@dataclass
+class AlterTableAddColumnCommand:
+    """ALTER TABLE table_name ADD COLUMN column_name datatype [constraints]"""
+    table_name: str
+    column_name: str
+    datatype: str
+    nullable: bool
+    unique: bool
+
+
+@dataclass
+class AlterTableDropColumnCommand:
+    """ALTER TABLE table_name DROP COLUMN column_name"""
+    table_name: str
+    column_name: str
+
+
+@dataclass
+class AlterTableRenameColumnCommand:
+    """ALTER TABLE table_name RENAME COLUMN old_name TO new_name"""
+    table_name: str
+    old_column_name: str
+    new_column_name: str
+
+
+@dataclass
+class BeginCommand:
+    """BEGIN [TRANSACTION]"""
+    pass
+
+
+@dataclass
+class CommitCommand:
+    """COMMIT"""
+    pass
+
+
+@dataclass
+class RollbackCommand:
+    """ROLLBACK"""
+    pass
+
+
 # ============================================================================
 # Parser (Recursive Descent)
 # ============================================================================
@@ -493,10 +554,18 @@ class Parser:
             return self._parse_analyze()
         elif token.type == TokenType.VACUUM:
             return self._parse_vacuum()
+        elif token.type == TokenType.ALTER:
+            return self._parse_alter()
+        elif token.type == TokenType.BEGIN:
+            return self._parse_begin()
+        elif token.type == TokenType.COMMIT:
+            return self._parse_commit()
+        elif token.type == TokenType.ROLLBACK:
+            return self._parse_rollback()
         else:
             raise SyntaxError(
                 f"Unexpected token '{token.value}' at line {token.line}, column {token.column}. "
-                f"Expected SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, EXPLAIN, ANALYZE, or VACUUM."
+                f"Expected SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, EXPLAIN, ANALYZE, VACUUM, ALTER, BEGIN, COMMIT, or ROLLBACK."
             )
 
     # ========================================================================
@@ -1015,6 +1084,119 @@ class Parser:
         self._consume_if(TokenType.SEMICOLON)
 
         return VacuumCommand(table_name)
+
+    def _parse_alter(self):
+        """Parse ALTER TABLE statement"""
+        self._expect(TokenType.ALTER)
+        self._expect(TokenType.TABLE)
+
+        # Table name
+        table_name_token = self._expect(TokenType.IDENTIFIER)
+        table_name = table_name_token.value
+
+        # Determine ALTER operation
+        if self._match(TokenType.ADD):
+            return self._parse_alter_add_column(table_name)
+        elif self._match(TokenType.DROP):
+            return self._parse_alter_drop_column(table_name)
+        elif self._match(TokenType.RENAME):
+            return self._parse_alter_rename_column(table_name)
+        else:
+            token = self._current()
+            raise SyntaxError(
+                f"Unexpected token '{token.value}' at line {token.line}, column {token.column}. "
+                f"Expected ADD, DROP, or RENAME after ALTER TABLE."
+            )
+
+    def _parse_alter_add_column(self, table_name: str) -> AlterTableAddColumnCommand:
+        """Parse ALTER TABLE ... ADD COLUMN"""
+        self._expect(TokenType.ADD)
+        self._consume_if(TokenType.COLUMN)  # COLUMN is optional
+
+        # Column name
+        col_name_token = self._expect(TokenType.IDENTIFIER)
+        col_name = col_name_token.value
+
+        # Datatype
+        datatype_token = self._advance()
+        if datatype_token.type not in [TokenType.INT, TokenType.BIGINT, TokenType.FLOAT,
+                                       TokenType.TEXT, TokenType.BOOLEAN, TokenType.TIMESTAMP]:
+            raise SyntaxError(
+                f"Invalid datatype '{datatype_token.value}' at line {datatype_token.line}, "
+                f"column {datatype_token.column}."
+            )
+        datatype = datatype_token.value
+
+        # Parse constraints (UNIQUE, NOT NULL)
+        nullable = True
+        unique = False
+
+        while True:
+            if self._match(TokenType.UNIQUE):
+                self._advance()
+                unique = True
+            elif self._match(TokenType.NOT):
+                self._advance()
+                self._expect(TokenType.NULL)
+                nullable = False
+            else:
+                break
+
+        self._consume_if(TokenType.SEMICOLON)
+
+        return AlterTableAddColumnCommand(table_name, col_name, datatype, nullable, unique)
+
+    def _parse_alter_drop_column(self, table_name: str) -> AlterTableDropColumnCommand:
+        """Parse ALTER TABLE ... DROP COLUMN"""
+        self._expect(TokenType.DROP)
+        self._consume_if(TokenType.COLUMN)  # COLUMN is optional
+
+        # Column name
+        col_name_token = self._expect(TokenType.IDENTIFIER)
+        col_name = col_name_token.value
+
+        self._consume_if(TokenType.SEMICOLON)
+
+        return AlterTableDropColumnCommand(table_name, col_name)
+
+    def _parse_alter_rename_column(self, table_name: str) -> AlterTableRenameColumnCommand:
+        """Parse ALTER TABLE ... RENAME COLUMN old_name TO new_name"""
+        self._expect(TokenType.RENAME)
+        self._consume_if(TokenType.COLUMN)  # COLUMN is optional
+
+        # Old column name
+        old_name_token = self._expect(TokenType.IDENTIFIER)
+        old_name = old_name_token.value
+
+        # TO keyword
+        self._expect(TokenType.TO)
+
+        # New column name
+        new_name_token = self._expect(TokenType.IDENTIFIER)
+        new_name = new_name_token.value
+
+        self._consume_if(TokenType.SEMICOLON)
+
+        return AlterTableRenameColumnCommand(table_name, old_name, new_name)
+
+    def _parse_begin(self) -> BeginCommand:
+        """Parse BEGIN [TRANSACTION] statement"""
+        self._expect(TokenType.BEGIN)
+        self._consume_if(TokenType.TRANSACTION)  # TRANSACTION is optional
+        self._consume_if(TokenType.SEMICOLON)
+        return BeginCommand()
+
+    def _parse_commit(self) -> CommitCommand:
+        """Parse COMMIT statement"""
+        self._expect(TokenType.COMMIT)
+        self._consume_if(TokenType.SEMICOLON)
+        return CommitCommand()
+
+    def _parse_rollback(self) -> RollbackCommand:
+        """Parse ROLLBACK statement"""
+        self._expect(TokenType.ROLLBACK)
+        self._consume_if(TokenType.SEMICOLON)
+        return RollbackCommand()
 
 
 # ============================================================================
