@@ -32,6 +32,26 @@ SELECT * FROM users WHERE name IS NULL;
 - Restored from backup on ROLLBACK
 - Buffer pool flushed before transaction start
 
+### 5. DROP INDEX ✅ IMPLEMENTED
+```sql
+DROP INDEX idx_name ON users;
+```
+**Status**: Fully implemented. Removes secondary indexes (primary key cannot be dropped).
+
+### 6. TRUNCATE TABLE ✅ IMPLEMENTED
+```sql
+TRUNCATE TABLE users;
+TRUNCATE users;  -- TABLE keyword optional
+```
+**Status**: Fully implemented. Fast table clear that preserves autoincrement counters.
+
+### 7. AUTOINCREMENT ✅ IMPLEMENTED
+```sql
+CREATE TABLE users (id INT PRIMARY KEY AUTOINCREMENT, name TEXT);
+INSERT INTO users (name) VALUES ('Alice');  -- id auto-generated
+```
+**Status**: Fully implemented for INT/BIGINT columns. Auto-generates sequential values.
+
 ---
 
 ## Remaining Issues
@@ -104,30 +124,6 @@ UPDATE users SET age = age + 1 WHERE age > 20;
 - ROLLBACK is inefficient (reloads everything)
 - Cannot do partial rollbacks
 - Lost work if crash happens during ROLLBACK
-
----
-
-## Missing SQL Commands
-
-### 5. DROP INDEX ❌ NOT IMPLEMENTED
-**Status**: Basic operation missing
-
-**Current**: Only DROP TABLE is supported
-**Missing**: DROP INDEX command
-
-**Workaround**: Users must manually delete .idx files
-
-**Fix Required**:
-- Add DROP INDEX parsing
-- Implement execute_drop_index() method
-
-### 6. TRUNCATE TABLE ❌ NOT IMPLEMENTED
-**Status**: Efficiency feature missing
-
-**Current**: Must use `DELETE FROM table;` (slow for large tables)
-**Missing**: TRUNCATE TABLE (fast reset)
-
-**Impact**: Slow to clear large tables
 
 ---
 
@@ -212,11 +208,14 @@ SELECT balance FROM users WHERE id = 1;
 
 ## Summary
 
-### ✅ Recently Fixed (Previously Critical):
+### ✅ Recently Fixed/Implemented:
 1. ✅ **BETWEEN operator** - Now working correctly
 2. ✅ **IS NULL/IS NOT NULL** - Now working correctly
 3. ✅ **ALTER TABLE index rebuilding** - All 18 Phase 2 tests passing
 4. ✅ **Transaction ROLLBACK** - Index backup/restore working
+5. ✅ **DROP INDEX** - Fully implemented
+6. ✅ **TRUNCATE TABLE** - Fully implemented
+7. ✅ **AUTOINCREMENT** - Auto-generate sequential values for INT/BIGINT
 
 ### Remaining Issues:
 1. ❌ No file locking (concurrent write corruption risk)
@@ -227,15 +226,12 @@ SELECT balance FROM users WHERE id = 1;
 1. ❌ DATE, TIME, JSON datatypes
 2. ❌ Transaction log/WAL
 3. ❌ File locking for concurrency
-4. ❌ DROP INDEX command
 
 ### Implementation Gaps:
 1. ❌ Arithmetic operators in parser
-2. ❌ TRUNCATE TABLE
 
 ### Documentation Fixes Needed:
 1. Remove/comment out `UPDATE age = age + 1` example (doesn't work)
-2. Document known limitations more prominently
 
 ---
 
@@ -248,8 +244,6 @@ SELECT balance FROM users WHERE id = 1;
 
 ### Medium Priority (Functionality):
 1. **Implement UPDATE expressions** - Match documented behavior
-2. **Add DROP INDEX** command
-3. **Add TRUNCATE TABLE** command
 
 ### Low Priority (Nice to Have):
 1. Add DATE/TIME/JSON types
@@ -275,7 +269,6 @@ SELECT balance FROM users WHERE id = 1;
 1. Concurrent write scenarios (file locking)
 2. UPDATE with expressions
 3. Transaction isolation levels
-4. DROP INDEX operations
 
 ---
 
@@ -286,10 +279,11 @@ The database engine is now **functionally complete** with all critical bugs fixe
 ### ✅ Working Well:
 - Core storage layer (pages, tuples, buffer pool)
 - B-tree indexing with composite keys
-- Full SQL support (SELECT, INSERT, UPDATE, DELETE)
+- Full SQL support (SELECT, INSERT, UPDATE, DELETE, DROP INDEX, TRUNCATE)
 - WHERE clauses: =, <, >, <=, >=, BETWEEN, IS NULL, IS NOT NULL, LIKE, AND, OR, NOT
 - ALTER TABLE (ADD/DROP/RENAME COLUMN)
 - Transactions (BEGIN/COMMIT/ROLLBACK)
+- AUTOINCREMENT for INT/BIGINT primary keys
 - REPL interface with meta-commands
 - ORDER BY, LIMIT, OFFSET
 - EXPLAIN, ANALYZE, VACUUM
@@ -298,12 +292,11 @@ The database engine is now **functionally complete** with all critical bugs fixe
 1. ❌ **File locking missing** - Single-user only (concurrent write corruption risk)
 2. ❌ **UPDATE expressions** - Cannot use `SET age = age + 1` (documented but not implemented)
 3. ⚠️ **Transaction isolation** - READ UNCOMMITTED level only (no MVCC)
-4. ❌ **Missing commands** - DROP INDEX, TRUNCATE TABLE
-5. ❌ **Missing data types** - DATE, TIME, JSON
+4. ❌ **Missing data types** - DATE, TIME, JSON
 
 ### Overall Assessment:
 - Phase 1: ✅ **Complete** - All core features working
-- Phase 2: ⚠️ **70% Complete** - ALTER TABLE + Transactions working, missing file locking/WAL
+- Phase 2: ⚠️ **80% Complete** - ALTER TABLE + Transactions + AUTOINCREMENT working, missing file locking/WAL
 - Test coverage: ✅ **97/97 tests passing (100%)**
 - Documentation: ⚠️ Some examples need updating (UPDATE expressions)
 

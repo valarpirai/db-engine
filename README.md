@@ -4,13 +4,14 @@ A PostgreSQL-inspired database engine built from scratch in Python for education
 
 ## Features
 
-- **Complete SQL Support**: CREATE, INSERT, SELECT, UPDATE, DELETE, ALTER TABLE
+- **Complete SQL Support**: CREATE, INSERT, SELECT, UPDATE, DELETE, ALTER TABLE, DROP INDEX, TRUNCATE
 - **B-tree Indexing**: Composite keys, unique constraints, TEXT key truncation
 - **Storage Layer**: 8KB pages, buffer pool (LRU cache), free space map
 - **Query Planning**: Cost-based optimization (index scan vs sequential scan)
 - **Transactions**: BEGIN, COMMIT, ROLLBACK with index backup/restore
 - **Schema Evolution**: ALTER TABLE ADD/DROP/RENAME COLUMN
-- **Maintenance**: VACUUM, ANALYZE, EXPLAIN
+- **Auto-increment**: AUTOINCREMENT constraint for INT/BIGINT primary keys
+- **Maintenance**: VACUUM, ANALYZE, EXPLAIN, TRUNCATE
 - **REPL Interface**: Interactive command-line with meta-commands
 
 ## Architecture
@@ -67,7 +68,7 @@ python -m db_engine.main --file schema.sql
 
 ```sql
 CREATE TABLE users (
-    id INT PRIMARY KEY,
+    id INT PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     age INT,
     email TEXT UNIQUE
@@ -78,7 +79,7 @@ CREATE TABLE users (
 
 ```sql
 INSERT INTO users VALUES (1, 'Alice', 25, 'alice@example.com');
-INSERT INTO users (id, name) VALUES (2, 'Bob');
+INSERT INTO users (name, email) VALUES ('Bob', 'bob@example.com');  -- id auto-generated
 ```
 
 ### Query Data
@@ -109,6 +110,14 @@ DELETE FROM users WHERE age < 18;
 ```sql
 CREATE INDEX idx_age ON users (age);
 CREATE UNIQUE INDEX idx_email ON users (email);
+DROP INDEX idx_age ON users;
+```
+
+### Table Management
+
+```sql
+TRUNCATE TABLE users;  -- Fast table clear (preserves autoincrement)
+DROP TABLE users;      -- Remove table entirely
 ```
 
 ### Maintenance
@@ -143,6 +152,7 @@ In the REPL:
 - **PRIMARY KEY**: Mandatory, unique, indexed automatically
 - **UNIQUE**: Enforced via index
 - **NOT NULL**: Enforced at insert/update
+- **AUTOINCREMENT**: Auto-generate sequential values (INT/BIGINT only)
 - **Composite keys**: Supported
 
 ## Testing

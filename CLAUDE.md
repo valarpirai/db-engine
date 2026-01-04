@@ -80,7 +80,7 @@ This is an educational database engine built from scratch in Python, inspired by
 ```sql
 -- CREATE TABLE with constraints
 CREATE TABLE users (
-    id INT PRIMARY KEY,
+    id INT PRIMARY KEY AUTOINCREMENT,
     email TEXT UNIQUE NOT NULL,
     name TEXT NOT NULL,
     age INT,
@@ -96,7 +96,7 @@ CREATE TABLE orders (
 
 -- INSERT
 INSERT INTO users VALUES (1, 'alice@example.com', 'Alice', 25, 1704067200);
-INSERT INTO users (id, name) VALUES (2, 'Bob');  -- Other columns NULL
+INSERT INTO users (email, name) VALUES ('bob@example.com', 'Bob');  -- id auto-generated
 
 -- UPDATE (Phase 1)
 UPDATE users SET age = 26 WHERE id = 1;
@@ -125,8 +125,13 @@ CREATE INDEX idx_users_age ON users(age);
 CREATE UNIQUE INDEX idx_email ON users(email);
 CREATE INDEX idx_composite ON orders(user_id, order_id);
 
--- DROP TABLE
+-- DROP TABLE / DROP INDEX
 DROP TABLE users;
+DROP INDEX idx_users_age ON users;
+
+-- TRUNCATE TABLE (fast table clear)
+TRUNCATE TABLE users;
+TRUNCATE users;  -- TABLE keyword optional
 
 -- EXPLAIN (query plan inspection - Phase 1)
 EXPLAIN SELECT * FROM users WHERE age > 18;
@@ -162,6 +167,7 @@ ROLLBACK;  -- Discard changes
 - PRIMARY KEY (mandatory for every table, automatically indexed, enforces uniqueness + NOT NULL)
 - UNIQUE (enforces uniqueness via index)
 - NOT NULL (column cannot be NULL)
+- AUTOINCREMENT (auto-generate sequential INT/BIGINT values)
 - Composite primary keys and composite indexes supported
 - No FOREIGN KEY support
 
