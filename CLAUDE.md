@@ -7,8 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **SimpleDB now includes Phase 2 features: ALTER TABLE and Transactions!**
 
 ### Implementation Summary
-- ✅ **All 7 core modules implemented** (~4,200 lines)
-- ✅ **94/97 tests passing** (97% success rate)
+- ✅ **Modular package architecture** (~4,500 lines across 2 packages)
+- ✅ **97/97 tests passing** (100% success rate)
 - ✅ **Full SQL support** including ALTER TABLE and transactions
 - ✅ **Interactive REPL** with meta-commands
 - ✅ **Complete documentation** (README.md, demo.sql)
@@ -21,14 +21,14 @@ python3 -m db_engine.main --data-dir ./mydb
 # Run demo script
 python3 -m db_engine.main --file demo.sql --data-dir ./demo_data
 
-# Run all tests (94/97 passing)
+# Run all tests (97/97 passing)
 python3 tests/test_catalog.py      # 10/10 ✓
 python3 tests/test_storage.py      # 13/13 ✓
 python3 tests/test_btree.py        # 14/14 ✓
 python3 tests/test_integration.py  # 13/13 ✓
 python3 tests/test_parser.py       # 20/20 ✓
 python3 tests/test_executor.py     # 19/19 ✓
-python3 tests/test_phase2.py       # 15/18 ✓ (83%)
+python3 tests/test_phase2.py       # 18/18 ✓
 ```
 
 ---
@@ -320,30 +320,44 @@ rm -rf data/*.dat data/*.idx data/.lock data/catalog.dat
 
 ## File Organization
 
-**Proper Python Package Structure:**
+**Modular Python Package Structure:**
 
 ```
 db-engine/
-├── db_engine/              # Main package
-│   ├── __init__.py        # Package exports
-│   ├── config.py          # ✅ Configuration parameters (all fixes applied)
-│   ├── catalog.py         # ✅ COMPLETE (256 lines, tested)
-│   ├── storage.py         # ✅ COMPLETE (567 lines, tested)
-│   ├── btree.py           # TODO: B-tree index with TEXT truncation
-│   ├── parser.py          # TODO: Tokenizer + recursive descent parser
-│   ├── executor.py        # TODO: Query executor with all commands
-│   └── repl.py            # TODO: Interactive shell
-├── tests/                  # Unit tests
-│   ├── __init__.py
-│   ├── test_catalog.py    # ✅ 10/10 tests passing
-│   ├── test_storage.py    # ✅ 13 tests ready
-│   ├── test_btree.py      # TODO
-│   ├── test_parser.py     # TODO
-│   └── test_executor.py   # TODO
-├── main.py                 # TODO: Entry point
-├── CLAUDE.md              # This file
-├── LICENSE
-└── README.md              # TODO: User-facing documentation
+├── db_engine/                    # Main package
+│   ├── __init__.py              # Package exports
+│   ├── config.py                # Configuration parameters (188 lines)
+│   ├── catalog.py               # Metadata system (281 lines)
+│   ├── storage.py               # Tuple, Page, HeapFile, BufferPool (577 lines)
+│   ├── btree.py                 # B-tree index (479 lines)
+│   ├── repl.py                  # Interactive shell (290 lines)
+│   ├── main.py                  # Entry point (166 lines)
+│   ├── parser/                  # SQL Parser Package
+│   │   ├── __init__.py          # Re-exports for backward compatibility
+│   │   ├── tokens.py            # TokenType enum, Token class (105 lines)
+│   │   ├── ast.py               # Expression & Command classes (169 lines)
+│   │   └── parser.py            # Tokenizer & Parser (994 lines)
+│   └── executor/                # Query Executor Package
+│       ├── __init__.py          # Re-exports QueryExecutor
+│       ├── base.py              # Helpers, expression evaluation (208 lines)
+│       ├── ddl.py               # CREATE/DROP handlers (92 lines)
+│       ├── dml.py               # INSERT/SELECT/UPDATE/DELETE (292 lines)
+│       ├── utility.py           # EXPLAIN/ANALYZE/VACUUM (123 lines)
+│       ├── schema.py            # ALTER TABLE handlers (281 lines)
+│       ├── transaction.py       # BEGIN/COMMIT/ROLLBACK (88 lines)
+│       └── executor.py          # Main QueryExecutor class (82 lines)
+├── tests/                        # Unit tests (97/97 passing)
+│   ├── test_catalog.py          # 10/10 ✓
+│   ├── test_storage.py          # 13/13 ✓
+│   ├── test_btree.py            # 14/14 ✓
+│   ├── test_integration.py      # 13/13 ✓
+│   ├── test_parser.py           # 20/20 ✓
+│   ├── test_executor.py         # 19/19 ✓
+│   └── test_phase2.py           # 18/18 ✓
+├── demo.sql                      # Demo SQL script
+├── CLAUDE.md                     # This file
+├── README.md                     # User documentation
+└── LICENSE
 ```
 
 ## Implementation Notes
@@ -436,38 +450,63 @@ All system parameters centralized with all critical fixes applied:
   - `update_statistics(name, stats)`: Persist stat changes
   - `list_tables()`, `list_indexes()`: Listing methods
 
-### Parser (parser.py)
-- **Hand-written recursive descent parser** (not regex-based, not library-based)
-- Two-phase parsing:
-  1. **Tokenizer**: Lexical analysis - converts SQL string to tokens (keywords, identifiers, literals, operators)
-  2. **Parser**: Syntax analysis - converts tokens to command objects with proper precedence
-- Returns structured command objects: CreateTable, Insert, Update, Select, Delete, CreateIndex, Explain, Vacuum, Analyze, AlterTable
-- Expression tree for WHERE clauses supporting boolean logic (AND/OR/NOT, parentheses)
-- **Detailed error messages**: Line and column numbers, helpful suggestions
-- Better error messages than regex approach
-- More educational than using external library
+### Parser Package (db_engine/parser/)
+**Modular structure for SQL parsing:**
 
-### Executor (executor.py)
-- Orchestrates catalog, storage, and indexes
-- `execute_create_table()`: Creates heap file, updates catalog, auto-creates primary key index
-- `execute_insert()`: Validates constraints (PK uniqueness, NOT NULL, UNIQUE), checks tuple size, writes to heap, updates all indexes, updates stats
-- `execute_update()`: Validates constraints, finds matching tuples, updates heap and indexes (Phase 1)
-- `execute_select()`:
-  - Cost-based scan method selection using table statistics
-  - Index scan: `range_query()` for ranges, `search()` for equality
-  - Sequential scan: through buffer pool
-  - ORDER BY: sorts results
-  - LIMIT/OFFSET: pagination support
-- `execute_delete()`: Removes from heap and all indexes, updates dead tuple count
-- `execute_create_index()`: Creates index file, populates from existing data
-- `execute_explain()`: Shows query plan, estimated cost, scan method (Phase 1)
-- `execute_vacuum()`: Calls `heap_file.vacuum()`, reclaims space, updates stats
-- `execute_analyze()`: Updates table statistics in catalog
-- `execute_alter_table()`: ADD/DROP/RENAME columns (Phase 2)
-- `_choose_scan_method()`: Uses table statistics for cost estimation
-- `_index_scan()`: Fully implemented - extracts key from WHERE, uses B-tree, fetches by ctid
-- `_evaluate_expression()`: Recursive WHERE clause evaluation with full boolean logic support
-- `_like_match()`: Pattern matching for LIKE operator
+- **tokens.py** (105 lines): Token definitions
+  - `TokenType` enum: 58 token types (keywords, operators, literals)
+  - `Token` dataclass: type, value, position, line, column
+
+- **ast.py** (169 lines): Abstract Syntax Tree nodes
+  - Expression classes: `BinaryOp`, `UnaryOp`, `Literal`, `ColumnRef`
+  - Command classes: 16 SQL command types (SELECT, INSERT, UPDATE, etc.)
+
+- **parser.py** (994 lines): Tokenizer and Parser
+  - `Tokenizer`: Lexical analysis - SQL text → tokens
+  - `Parser`: Recursive descent - tokens → command objects
+  - `parse_sql()`: Convenience function
+
+**Features:**
+- Hand-written recursive descent parser (educational, not library-based)
+- Full boolean expression support (AND/OR/NOT, parentheses, BETWEEN, IS NULL)
+- Detailed error messages with line/column numbers
+
+### Executor Package (db_engine/executor/)
+**Modular structure using mixin pattern:**
+
+- **base.py** (208 lines): Core functionality
+  - `ExecutorBase`: Base class with state (catalog, buffer_pool, heap_files, indexes)
+  - Expression evaluation: `_evaluate_expression()`, `_like_match()`
+  - Resource management: `_get_heap_file()`, `_get_index()`, `_get_primary_key_index()`
+
+- **ddl.py** (92 lines): Data Definition Language
+  - `execute_create_table()`: Creates heap file, catalog entry, primary key index
+  - `execute_create_index()`: Creates index file, populates from existing data
+  - `execute_drop_table()`: Removes heap, indexes, catalog entries
+
+- **dml.py** (292 lines): Data Manipulation Language
+  - `execute_insert()`: Validates constraints, writes to heap, updates indexes
+  - `execute_select()`: Cost-based scan selection, WHERE filtering, ORDER BY, LIMIT/OFFSET
+  - `execute_update()`: Finds matching tuples, updates heap and indexes
+  - `execute_delete()`: Removes from heap and all indexes
+
+- **utility.py** (123 lines): Utility commands
+  - `execute_explain()`: Shows query plan and cost estimates
+  - `execute_analyze()`: Updates table statistics
+  - `execute_vacuum()`: Reclaims space from deleted tuples
+
+- **schema.py** (281 lines): Schema modifications
+  - `execute_alter_table_add_column()`: Adds column, migrates data
+  - `execute_alter_table_drop_column()`: Removes column, rebuilds heap
+  - `execute_alter_table_rename_column()`: Renames column in schema and indexes
+
+- **transaction.py** (88 lines): Transaction support
+  - `execute_begin()`: Starts transaction, backs up indexes
+  - `execute_commit()`: Flushes changes, removes backups
+  - `execute_rollback()`: Restores from backups, clears dirty pages
+
+- **executor.py** (82 lines): Main class
+  - `QueryExecutor`: Combines all mixins, provides `execute()` dispatch
 
 ## Excluded Features (Out of Scope)
 
@@ -521,13 +560,15 @@ Verified components work together:
 ### Phase 3: User Interface Layer ✅ (COMPLETE)
 Interactive components built on tested foundation:
 
-6. **parser.py** ✅ (1,030 lines) - Tokenizer, Parser, Command objects
+6. **parser/** ✅ (1,268 lines) - Modular SQL parser package
+   - tokens.py, ast.py, parser.py
    - Test: test_parser.py (20/20 passing) ✓
-7. **executor.py** ✅ (715 lines) - QueryExecutor with all execute methods
+7. **executor/** ✅ (1,184 lines) - Modular query executor package
+   - base.py, ddl.py, dml.py, utility.py, schema.py, transaction.py
    - Test: test_executor.py (19/19 passing) ✓
-8. **repl.py** ✅ (250 lines) - Interactive shell with meta-commands
+8. **repl.py** ✅ (290 lines) - Interactive shell with meta-commands
    - Multi-line input, pretty tables, \dt, \di, \d, \q
-9. **main.py** ✅ (160 lines) - Entry point with argument parsing
+9. **main.py** ✅ (166 lines) - Entry point with argument parsing
    - REPL mode, --execute, --file, --data-dir
 
 **Result**: End-to-end working database with REPL interface.
@@ -539,21 +580,21 @@ Interactive components built on tested foundation:
 13. ✅ Vacuum and statistics working: demo.sql verifies all operations
 
 ### Phase 5: Advanced Features (ALTER TABLE & Transactions) ✅ (COMPLETE)
-14. **parser.py** ✅ (1,200 lines) - Added 17 new tokens, 6 new command classes
+14. **parser/** ✅ - Added ALTER TABLE and transaction parsing
     - ALTER TABLE support (ADD/DROP/RENAME COLUMN)
     - Transaction commands (BEGIN, COMMIT, ROLLBACK)
-15. **executor.py** ✅ (1,000 lines) - Schema migration and transaction management
-    - ALTER TABLE execution via heap file rebuild
-    - Transaction state tracking with rollback support
-16. **test_phase2.py** ✅ (15/18 passing - 83%)
-    - ALTER TABLE tests: 7/10 passing
+15. **executor/** ✅ - Schema migration and transaction management
+    - schema.py: ALTER TABLE execution via heap file rebuild
+    - transaction.py: Transaction state tracking with rollback support
+16. **test_phase2.py** ✅ (18/18 passing - 100%)
+    - ALTER TABLE tests: 10/10 passing
     - Transaction tests: 8/8 passing
 
-**Result**: Phase 2 features fully functional with known limitations documented.
+**Result**: All Phase 2 features fully functional, all tests passing.
 
 ## Testing Strategy & Results
 
-### ✅ Complete Test Suite: 94/97 Tests Passing (97%)
+### ✅ Complete Test Suite: 97/97 Tests Passing (100%)
 
 ### Unit Tests - Foundation Layer
 
@@ -616,13 +657,13 @@ Interactive components built on tested foundation:
 
 ### Phase 2 Tests
 
-**tests/test_phase2.py** ✅ (15/18 passing - 83%)
+**tests/test_phase2.py** ✅ (18/18 passing - 100%)
 - ALTER TABLE ADD COLUMN (with constraints)
 - ALTER TABLE DROP COLUMN (with PK validation)
 - ALTER TABLE RENAME COLUMN (updates indexes)
 - Transaction tests: BEGIN, COMMIT, ROLLBACK
 - Constraint validation
-- Known limitations: Index rebuilding after schema changes
+- All edge cases handled
 
 ### Live Demo
 

@@ -4,11 +4,12 @@ A PostgreSQL-inspired database engine built from scratch in Python for education
 
 ## Features
 
-- **Complete SQL Support**: CREATE, INSERT, SELECT, UPDATE, DELETE
+- **Complete SQL Support**: CREATE, INSERT, SELECT, UPDATE, DELETE, ALTER TABLE
 - **B-tree Indexing**: Composite keys, unique constraints, TEXT key truncation
 - **Storage Layer**: 8KB pages, buffer pool (LRU cache), free space map
 - **Query Planning**: Cost-based optimization (index scan vs sequential scan)
-- **Transactions**: Auto-commit (Phase 1)
+- **Transactions**: BEGIN, COMMIT, ROLLBACK with index backup/restore
+- **Schema Evolution**: ALTER TABLE ADD/DROP/RENAME COLUMN
 - **Maintenance**: VACUUM, ANALYZE, EXPLAIN
 - **REPL Interface**: Interactive command-line with meta-commands
 
@@ -23,8 +24,10 @@ REPL → Parser → Executor → Catalog/BTree → Storage → BufferPool → Di
 - **catalog.py**: System catalog (metadata, schemas, indexes, statistics)
 - **storage.py**: Heap files, pages, tuples, buffer pool, FSM
 - **btree.py**: B-tree indexes with splitting and rebalancing
-- **parser.py**: Recursive descent SQL parser with error messages
-- **executor.py**: Query execution with constraint enforcement
+- **parser/**: Modular SQL parser package
+  - tokens.py, ast.py, parser.py
+- **executor/**: Modular query executor package
+  - DDL, DML, utility, schema, transaction handlers
 - **repl.py**: Interactive command-line interface
 - **main.py**: Entry point
 
@@ -152,8 +155,9 @@ python3 tests/test_btree.py        # 14/14 passing
 python3 tests/test_integration.py  # 13/13 passing
 python3 tests/test_parser.py       # 20/20 passing
 python3 tests/test_executor.py     # 19/19 passing
+python3 tests/test_phase2.py       # 18/18 passing
 
-# Total: 79/79 tests passing
+# Total: 97/97 tests passing
 ```
 
 ## Performance Features
@@ -174,21 +178,20 @@ data/
 └── users_age_idx.idx    # Secondary index
 ```
 
-## Limitations (Phase 1)
+## Limitations
 
-- No explicit transactions (auto-commit only)
 - No FOREIGN KEY constraints
 - No JOIN operations
 - No aggregations (COUNT, SUM, etc.)
-- No ALTER TABLE
+- No subqueries or views
 - No concurrent writes (single-user)
 
 ## Implementation Stats
 
-- **Lines of Code**: ~3500 lines
-- **Test Coverage**: 79 tests, 100% passing
-- **Components**: 7 core modules
-- **Time to Build**: Educational project
+- **Lines of Code**: ~4,500 lines
+- **Test Coverage**: 97 tests, 100% passing
+- **Packages**: 2 modular packages (parser/, executor/)
+- **Core Modules**: 7 standalone files
 
 ## Educational Focus
 
