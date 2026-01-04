@@ -20,6 +20,7 @@ class DMLMixin:
     def execute_insert(self, cmd: InsertCommand) -> str:
         """Execute INSERT command"""
         schema = self.catalog.get_table(cmd.table_name)
+        stats = self.catalog.get_statistics(cmd.table_name)
 
         # Map values to columns
         if cmd.columns is None:
@@ -28,7 +29,7 @@ class DMLMixin:
                 raise ValueError(
                     f"Value count ({len(cmd.values)}) does not match column count ({len(schema.columns)})"
                 )
-            values = cmd.values
+            values = list(cmd.values)
         else:
             # INSERT INTO table (col1, col2) VALUES (...) - map to specified columns
             if len(cmd.values) != len(cmd.columns):
@@ -43,14 +44,22 @@ class DMLMixin:
                     idx = cmd.columns.index(col.name)
                     values.append(cmd.values[idx])
                 else:
-                    # Column not specified - use NULL if nullable
-                    if not col.nullable:
-                        raise ValueError(f"Column '{col.name}' cannot be NULL")
+                    # Column not specified - use NULL (will be auto-filled for autoincrement)
                     values.append(None)
 
-        # Validate NOT NULL constraints
+        # Handle AUTOINCREMENT columns
+        autoincrement_used = False
         for i, col in enumerate(schema.columns):
-            if not col.nullable and values[i] is None:
+            if col.autoincrement and values[i] is None:
+                # Auto-generate next value
+                next_val = stats.autoincrement_counters.get(col.name, 1)
+                values[i] = next_val
+                stats.autoincrement_counters[col.name] = next_val + 1
+                autoincrement_used = True
+
+        # Validate NOT NULL constraints (after autoincrement fills in values)
+        for i, col in enumerate(schema.columns):
+            if not col.nullable and not col.autoincrement and values[i] is None:
                 raise ValueError(f"Column '{col.name}' cannot be NULL")
 
         # Check PRIMARY KEY uniqueness

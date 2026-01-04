@@ -55,6 +55,8 @@ class TokenType(Enum):
     TRANSACTION = auto()
     BETWEEN = auto()
     IS = auto()
+    TRUNCATE = auto()
+    AUTOINCREMENT = auto()
 
     # Data types
     INT = auto()

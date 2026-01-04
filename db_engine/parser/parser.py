@@ -11,8 +11,8 @@ from typing import List, Any
 from .tokens import TokenType, Token
 from .ast import (
     Expression, BinaryOp, UnaryOp, Literal, ColumnRef,
-    CreateTableCommand, CreateIndexCommand, DropTableCommand,
-    InsertCommand, SelectCommand, UpdateCommand, DeleteCommand,
+    CreateTableCommand, CreateIndexCommand, DropTableCommand, DropIndexCommand,
+    TruncateTableCommand, InsertCommand, SelectCommand, UpdateCommand, DeleteCommand,
     ExplainCommand, AnalyzeCommand, VacuumCommand,
     AlterTableAddColumnCommand, AlterTableDropColumnCommand, AlterTableRenameColumnCommand,
     BeginCommand, CommitCommand, RollbackCommand
@@ -65,6 +65,8 @@ class Tokenizer:
         'TRANSACTION': TokenType.TRANSACTION,
         'BETWEEN': TokenType.BETWEEN,
         'IS': TokenType.IS,
+        'TRUNCATE': TokenType.TRUNCATE,
+        'AUTOINCREMENT': TokenType.AUTOINCREMENT,
         'INT': TokenType.INT,
         'BIGINT': TokenType.BIGINT,
         'FLOAT': TokenType.FLOAT,
@@ -315,10 +317,12 @@ class Parser:
             return self._parse_commit()
         elif token.type == TokenType.ROLLBACK:
             return self._parse_rollback()
+        elif token.type == TokenType.TRUNCATE:
+            return self._parse_truncate()
         else:
             raise SyntaxError(
                 f"Unexpected token '{token.value}' at line {token.line}, column {token.column}. "
-                f"Expected SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, EXPLAIN, ANALYZE, VACUUM, ALTER, BEGIN, COMMIT, or ROLLBACK."
+                f"Expected SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, TRUNCATE, EXPLAIN, ANALYZE, VACUUM, ALTER, BEGIN, COMMIT, or ROLLBACK."
             )
 
     # ========================================================================
@@ -695,6 +699,7 @@ class Parser:
             nullable = True
             unique = False
             is_primary_key = False
+            autoincrement = False
 
             while True:
                 if self._match(TokenType.PRIMARY):
@@ -710,10 +715,13 @@ class Parser:
                 elif self._match(TokenType.UNIQUE):
                     self._advance()
                     unique = True
+                elif self._match(TokenType.AUTOINCREMENT):
+                    self._advance()
+                    autoincrement = True
                 else:
                     break
 
-            columns.append((col_name, datatype, nullable, unique))
+            columns.append((col_name, datatype, nullable, unique, autoincrement))
 
             # Check for comma
             if not self._consume_if(TokenType.COMMA):
@@ -812,14 +820,35 @@ class Parser:
     # DROP parsing
     # ========================================================================
 
-    def _parse_drop(self) -> DropTableCommand:
-        """Parse DROP TABLE statement"""
+    def _parse_drop(self):
+        """Parse DROP TABLE or DROP INDEX statement"""
         self._expect(TokenType.DROP)
-        self._expect(TokenType.TABLE, "Expected TABLE after DROP")
-        table_name = self._expect(TokenType.IDENTIFIER, "Expected table name").value
-        self._consume_if(TokenType.SEMICOLON)
 
-        return DropTableCommand(table_name)
+        if self._match(TokenType.TABLE):
+            self._advance()
+            table_name = self._expect(TokenType.IDENTIFIER, "Expected table name").value
+            self._consume_if(TokenType.SEMICOLON)
+            return DropTableCommand(table_name)
+
+        elif self._match(TokenType.INDEX):
+            self._advance()
+            index_name = self._expect(TokenType.IDENTIFIER, "Expected index name").value
+
+            # Handle ON keyword (it's parsed as IDENTIFIER)
+            if not self._match(TokenType.IDENTIFIER) or self._current().value.upper() != 'ON':
+                token = self._current()
+                raise SyntaxError(f"Expected ON keyword at line {token.line}, column {token.column}")
+            self._advance()
+
+            table_name = self._expect(TokenType.IDENTIFIER, "Expected table name").value
+            self._consume_if(TokenType.SEMICOLON)
+            return DropIndexCommand(index_name, table_name)
+
+        else:
+            token = self._current()
+            raise SyntaxError(
+                f"Expected TABLE or INDEX after DROP at line {token.line}, column {token.column}"
+            )
 
     # ========================================================================
     # Utility commands
@@ -980,6 +1009,18 @@ class Parser:
         self._expect(TokenType.ROLLBACK)
         self._consume_if(TokenType.SEMICOLON)
         return RollbackCommand()
+
+    # ========================================================================
+    # TRUNCATE parsing
+    # ========================================================================
+
+    def _parse_truncate(self) -> TruncateTableCommand:
+        """Parse TRUNCATE TABLE statement"""
+        self._expect(TokenType.TRUNCATE)
+        self._consume_if(TokenType.TABLE)  # TABLE is optional
+        table_name = self._expect(TokenType.IDENTIFIER, "Expected table name").value
+        self._consume_if(TokenType.SEMICOLON)
+        return TruncateTableCommand(table_name)
 
 
 # ============================================================================

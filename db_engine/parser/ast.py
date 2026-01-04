@@ -55,7 +55,7 @@ class ColumnRef(Expression):
 class CreateTableCommand:
     """CREATE TABLE table_name (columns...) PRIMARY KEY (...)"""
     table_name: str
-    columns: List[tuple]  # [(name, datatype, nullable, unique), ...]
+    columns: List[tuple]  # [(name, datatype, nullable, unique, autoincrement), ...]
     primary_key: List[str]  # Column names
 
 
@@ -71,6 +71,19 @@ class CreateIndexCommand:
 @dataclass
 class DropTableCommand:
     """DROP TABLE table_name"""
+    table_name: str
+
+
+@dataclass
+class DropIndexCommand:
+    """DROP INDEX index_name ON table_name"""
+    index_name: str
+    table_name: str
+
+
+@dataclass
+class TruncateTableCommand:
+    """TRUNCATE TABLE table_name"""
     table_name: str
 
 

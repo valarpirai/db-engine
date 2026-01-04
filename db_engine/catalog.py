@@ -22,6 +22,7 @@ class ColumnDef:
     datatype: str  # 'INT', 'BIGINT', 'FLOAT', 'TEXT', 'BOOLEAN', 'TIMESTAMP'
     nullable: bool = True
     unique: bool = False
+    autoincrement: bool = False
 
     def __repr__(self):
         constraints = []
@@ -29,6 +30,8 @@ class ColumnDef:
             constraints.append("NOT NULL")
         if self.unique:
             constraints.append("UNIQUE")
+        if self.autoincrement:
+            constraints.append("AUTOINCREMENT")
         constraint_str = " " + " ".join(constraints) if constraints else ""
         return f"{self.name} {self.datatype}{constraint_str}"
 
@@ -85,10 +88,13 @@ class TableStatistics:
     dead_tuple_count: int = 0
     distinct_values: Dict[str, int] = None  # column_name -> distinct count
     modification_count: int = 0  # Incremented on INSERT/UPDATE/DELETE
+    autoincrement_counters: Dict[str, int] = None  # column_name -> next value
 
     def __post_init__(self):
         if self.distinct_values is None:
             self.distinct_values = {}
+        if self.autoincrement_counters is None:
+            self.autoincrement_counters = {}
 
     def needs_update(self, threshold: int = 1000) -> bool:
         """Check if statistics need auto-update"""
@@ -258,6 +264,19 @@ class Catalog:
             idx for idx_name, idx in self.indexes.items()
             if idx.table_name == table_name
         ]
+
+    def drop_index(self, index_name: str, table_name: str):
+        """Remove an index from the catalog"""
+        idx_key = f"{table_name}_{index_name}"
+        if idx_key not in self.indexes:
+            raise ValueError(f"Index '{index_name}' does not exist on table '{table_name}'")
+
+        # Don't allow dropping primary key index
+        if index_name == "pkey":
+            raise ValueError(f"Cannot drop primary key index")
+
+        del self.indexes[idx_key]
+        self.save()
 
     def get_statistics(self, table_name: str) -> TableStatistics:
         """Get statistics for a table"""

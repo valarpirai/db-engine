@@ -7,8 +7,8 @@ This module provides:
 
 from ..parser import (
     SelectCommand, InsertCommand, UpdateCommand, DeleteCommand,
-    CreateTableCommand, CreateIndexCommand, DropTableCommand,
-    ExplainCommand, AnalyzeCommand, VacuumCommand,
+    CreateTableCommand, CreateIndexCommand, DropTableCommand, DropIndexCommand,
+    TruncateTableCommand, ExplainCommand, AnalyzeCommand, VacuumCommand,
     AlterTableAddColumnCommand, AlterTableDropColumnCommand, AlterTableRenameColumnCommand,
     BeginCommand, CommitCommand, RollbackCommand
 )
@@ -34,7 +34,7 @@ class QueryExecutor(
 
     Combines functionality from:
     - ExecutorBase: Helpers and expression evaluation
-    - DDLMixin: CREATE TABLE, CREATE INDEX, DROP TABLE
+    - DDLMixin: CREATE TABLE, CREATE INDEX, DROP TABLE, DROP INDEX, TRUNCATE TABLE
     - DMLMixin: INSERT, SELECT, UPDATE, DELETE
     - UtilityMixin: EXPLAIN, ANALYZE, VACUUM
     - SchemaMixin: ALTER TABLE (ADD/DROP/RENAME COLUMN)
@@ -52,6 +52,10 @@ class QueryExecutor(
             return self.execute_create_index(command)
         elif isinstance(command, DropTableCommand):
             return self.execute_drop_table(command)
+        elif isinstance(command, DropIndexCommand):
+            return self.execute_drop_index(command)
+        elif isinstance(command, TruncateTableCommand):
+            return self.execute_truncate_table(command)
         elif isinstance(command, InsertCommand):
             return self.execute_insert(command)
         elif isinstance(command, SelectCommand):
