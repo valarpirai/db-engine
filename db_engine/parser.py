@@ -55,6 +55,8 @@ class TokenType(Enum):
     COMMIT = auto()
     ROLLBACK = auto()
     TRANSACTION = auto()
+    BETWEEN = auto()
+    IS = auto()
 
     # Data types
     INT = auto()
@@ -149,6 +151,8 @@ class Tokenizer:
         'COMMIT': TokenType.COMMIT,
         'ROLLBACK': TokenType.ROLLBACK,
         'TRANSACTION': TokenType.TRANSACTION,
+        'BETWEEN': TokenType.BETWEEN,
+        'IS': TokenType.IS,
         'INT': TokenType.INT,
         'BIGINT': TokenType.BIGINT,
         'FLOAT': TokenType.FLOAT,
@@ -735,6 +739,27 @@ class Parser:
     def _parse_comparison(self) -> Expression:
         """Parse comparison expression"""
         left = self._parse_primary()
+
+        # BETWEEN operator: col BETWEEN low AND high
+        # Transforms to: (col >= low) AND (col <= high)
+        if self._consume_if(TokenType.BETWEEN):
+            lower = self._parse_primary()
+            self._expect(TokenType.AND, "Expected 'AND' in BETWEEN expression")
+            upper = self._parse_primary()
+            # Transform to (left >= lower) AND (left <= upper)
+            return BinaryOp('AND',
+                           BinaryOp('>=', left, lower),
+                           BinaryOp('<=', left, upper))
+
+        # IS NULL / IS NOT NULL
+        if self._consume_if(TokenType.IS):
+            # Check for NOT
+            is_negated = self._consume_if(TokenType.NOT)
+            self._expect(TokenType.NULL, "Expected 'NULL' after 'IS' or 'IS NOT'")
+            result = BinaryOp('IS', left, Literal(None, 'NULL'))
+            if is_negated:
+                return UnaryOp('NOT', result)
+            return result
 
         # Comparison operators
         if self._match(TokenType.EQ, TokenType.NEQ, TokenType.LT, TokenType.GT,

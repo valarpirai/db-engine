@@ -39,6 +39,7 @@ class QueryExecutor:
         # Transaction state
         self.in_transaction = False
         self.transaction_operations = []  # List of (operation, undo_info) tuples
+        self.transaction_index_backups = {}  # Map: index_file -> backup_file
 
     def execute(self, command):
         """Main entry point - dispatch to specific executors"""
@@ -614,6 +615,9 @@ class QueryExecutor:
             elif expr.op == 'OR':
                 return self._evaluate_expression(expr.left, tuple_obj, schema) or \
                        self._evaluate_expression(expr.right, tuple_obj, schema)
+            elif expr.op == 'IS':
+                # IS NULL check: left IS NULL (right is always Literal(None))
+                return left_val is None
 
         elif isinstance(expr, UnaryOp):
             if expr.op == 'NOT':
@@ -723,6 +727,35 @@ class QueryExecutor:
         """Extract key value(s) from Tuple object"""
         return self._extract_key(tuple_obj.values, schema, key_columns)
 
+    def _rebuild_primary_key_index(self, table_name: str, schema: TableSchema):
+        """Rebuild primary key index for table after schema change"""
+        # Create primary key index metadata
+        pkey_index_name = "pkey"
+        index_metadata = IndexMetadata(
+            index_name=pkey_index_name,
+            table_name=table_name,
+            columns=schema.primary_key,
+            unique=True
+        )
+        self.catalog.create_index(index_metadata)
+
+        # Create the index file
+        idx_file = os.path.join(self.data_dir, index_metadata.index_file)
+        index = BTreeIndex(idx_file, schema.primary_key, unique=True)
+        index.create()
+
+        # Populate index from heap file
+        heap = self._get_heap_file(table_name)
+        for tuple_obj, ctid in heap.scan_all():
+            key = self._extract_key_from_tuple(tuple_obj, schema, schema.primary_key)
+            index.insert(key, ctid)
+
+        # Cache the index
+        index_key = f"{table_name}_{pkey_index_name}"
+        self.indexes[index_key] = index
+
+        self.catalog.save()
+
     # ========================================================================
     # ALTER TABLE
     # ========================================================================
@@ -745,6 +778,18 @@ class QueryExecutor:
             primary_key=list(schema.primary_key)  # Copy list
         )
 
+        # Check if table has existing data
+        heap = self._get_heap_file(cmd.table_name)
+        has_existing_data = any(True for _ in heap.scan_all())
+
+        # NOT NULL columns require either no existing data or a DEFAULT value
+        # (DEFAULT is not supported, so we must reject NOT NULL with existing data)
+        if not cmd.nullable and has_existing_data:
+            raise ValueError(
+                f"Cannot add NOT NULL column '{cmd.column_name}' to table '{cmd.table_name}' "
+                f"with existing data. Use a nullable column or add the column to an empty table."
+            )
+
         # Add column definition to schema
         new_column = ColumnDef(
             name=cmd.column_name,
@@ -756,7 +801,6 @@ class QueryExecutor:
 
         # Update all existing tuples (add NULL for new column)
         # We need to scan raw tuple data before updating the schema
-        heap = self._get_heap_file(cmd.table_name)
         tuples_to_update = []
 
         # Manually scan pages to get raw tuple data
@@ -795,9 +839,19 @@ class QueryExecutor:
             new_tuple = Tuple(new_values, schema)
             new_heap.insert_tuple(new_tuple)
 
+        # Flush buffer pool to write new heap's pages to disk
+        self.buffer_pool.flush_all()
+
         # Replace old heap file with new one
-        if heap_path in self.heap_files:
-            del self.heap_files[heap_path]
+        # Note: heap_files uses table_name as key, not file path
+        if cmd.table_name in self.heap_files:
+            del self.heap_files[cmd.table_name]
+
+        # Clear buffer pool cache for all related files to avoid stale data
+        keys_to_remove = [k for k in self.buffer_pool.cache.keys()
+                         if k[0] == heap_path or k[0] == temp_heap_path]
+        for k in keys_to_remove:
+            del self.buffer_pool.cache[k]
 
         import shutil
         shutil.move(temp_heap_path, heap_path)
@@ -810,16 +864,20 @@ class QueryExecutor:
             idx_file = os.path.join(self.data_dir, idx_metadata.index_file)
             if os.path.exists(idx_file):
                 os.remove(idx_file)
-            # Remove from cache
-            idx_key = f"{cmd.table_name}:{idx_metadata.index_name}"
+            # Remove from cache (uses table_name:index_name format)
+            idx_key = f"{cmd.table_name}_{idx_metadata.index_name}"
             if idx_key in self.indexes:
                 del self.indexes[idx_key]
-            # Remove from catalog
-            if idx_metadata.index_name in self.catalog.indexes:
-                del self.catalog.indexes[idx_metadata.index_name]
+            # Remove from catalog (uses table_name_index_name format)
+            catalog_key = f"{cmd.table_name}_{idx_metadata.index_name}"
+            if catalog_key in self.catalog.indexes:
+                del self.catalog.indexes[catalog_key]
 
         # Save updated catalog without the old indexes
         self.catalog.save()
+
+        # Rebuild primary key index (required for table operations)
+        self._rebuild_primary_key_index(cmd.table_name, schema)
 
         # If column is unique, create an index
         if cmd.unique:
@@ -916,9 +974,19 @@ class QueryExecutor:
             new_tuple = Tuple(new_values, schema)
             new_heap.insert_tuple(new_tuple)
 
+        # Flush buffer pool to write new heap's pages to disk
+        self.buffer_pool.flush_all()
+
         # Replace old heap file with new one
-        if heap_path in self.heap_files:
-            del self.heap_files[heap_path]
+        # Note: heap_files uses table_name as key, not file path
+        if cmd.table_name in self.heap_files:
+            del self.heap_files[cmd.table_name]
+
+        # Clear buffer pool cache for all related files to avoid stale data
+        keys_to_remove = [k for k in self.buffer_pool.cache.keys()
+                         if k[0] == heap_path or k[0] == temp_heap_path]
+        for k in keys_to_remove:
+            del self.buffer_pool.cache[k]
 
         import shutil
         shutil.move(temp_heap_path, heap_path)
@@ -931,16 +999,20 @@ class QueryExecutor:
             idx_file = os.path.join(self.data_dir, idx_metadata.index_file)
             if os.path.exists(idx_file):
                 os.remove(idx_file)
-            # Remove from cache
-            idx_key = f"{cmd.table_name}:{idx_metadata.index_name}"
+            # Remove from cache (uses table_name_index_name format)
+            idx_key = f"{cmd.table_name}_{idx_metadata.index_name}"
             if idx_key in self.indexes:
                 del self.indexes[idx_key]
-            # Remove from catalog
-            if idx_metadata.index_name in self.catalog.indexes:
-                del self.catalog.indexes[idx_metadata.index_name]
+            # Remove from catalog (uses table_name_index_name format)
+            catalog_key = f"{cmd.table_name}_{idx_metadata.index_name}"
+            if catalog_key in self.catalog.indexes:
+                del self.catalog.indexes[catalog_key]
 
         # Save updated catalog without the old indexes
         self.catalog.save()
+
+        # Rebuild primary key index (required for table operations)
+        self._rebuild_primary_key_index(cmd.table_name, schema)
 
         return f"Dropped column '{cmd.column_name}' from table '{cmd.table_name}'"
 
@@ -988,8 +1060,23 @@ class QueryExecutor:
         if self.in_transaction:
             raise ValueError("Already in a transaction. Use COMMIT or ROLLBACK first.")
 
+        # Flush buffer pool to disk to create a clean snapshot for rollback
+        self.buffer_pool.flush_all()
+
         self.in_transaction = True
         self.transaction_operations = []
+        self.transaction_index_backups = {}
+
+        # Back up all index files for rollback support
+        # (B-tree writes directly to disk, so we need file-level backups)
+        import shutil
+        for idx_name, idx_meta in self.catalog.indexes.items():
+            idx_file = os.path.join(self.data_dir, idx_meta.index_file)
+            if os.path.exists(idx_file):
+                backup_file = idx_file + '.txn_backup'
+                shutil.copy2(idx_file, backup_file)
+                self.transaction_index_backups[idx_file] = backup_file
+
         return "Transaction started"
 
     def execute_commit(self, cmd: CommitCommand) -> str:
@@ -1001,9 +1088,15 @@ class QueryExecutor:
         self.buffer_pool.flush_all()
         self.catalog.save()
 
+        # Remove index backup files (transaction successful)
+        for idx_file, backup_file in self.transaction_index_backups.items():
+            if os.path.exists(backup_file):
+                os.remove(backup_file)
+
         # Clear transaction state
         self.in_transaction = False
         self.transaction_operations = []
+        self.transaction_index_backups = {}
 
         return "Transaction committed"
 
@@ -1019,6 +1112,13 @@ class QueryExecutor:
         # Clear buffer pool (discard dirty pages)
         self.buffer_pool = BufferPool()
 
+        # Restore index files from backups (B-tree writes directly to disk)
+        import shutil
+        for idx_file, backup_file in self.transaction_index_backups.items():
+            if os.path.exists(backup_file):
+                shutil.copy2(backup_file, idx_file)
+                os.remove(backup_file)
+
         # Reload catalog from disk
         self.catalog.load()
 
@@ -1029,6 +1129,7 @@ class QueryExecutor:
         # Clear transaction state
         self.in_transaction = False
         self.transaction_operations = []
+        self.transaction_index_backups = {}
 
         return "Transaction rolled back"
 

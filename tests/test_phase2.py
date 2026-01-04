@@ -66,12 +66,14 @@ class TestAlterTable(unittest.TestCase):
 
     def test_add_column_not_null(self):
         """Test ALTER TABLE ADD COLUMN with NOT NULL fails on existing data"""
-        # This should work even though NOT NULL is specified,
-        # because we insert NULL for existing rows
+        # Cannot add NOT NULL column to table with existing data
+        # (would require a DEFAULT value which we don't support)
         alter_sql = "ALTER TABLE users ADD COLUMN status TEXT NOT NULL;"
         cmd = parse_sql(alter_sql)
-        result = self.executor.execute(cmd)
-        self.assertIn("Added column", result)
+
+        with self.assertRaises(ValueError) as ctx:
+            self.executor.execute(cmd)
+        self.assertIn("Cannot add NOT NULL column", str(ctx.exception))
 
     def test_add_column_unique(self):
         """Test ALTER TABLE ADD COLUMN with UNIQUE"""
