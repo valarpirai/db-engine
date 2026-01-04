@@ -15,6 +15,8 @@ from db_engine.parser import (
     SelectCommand, InsertCommand, UpdateCommand, DeleteCommand,
     CreateTableCommand, CreateIndexCommand, DropTableCommand,
     ExplainCommand, AnalyzeCommand, VacuumCommand,
+    AlterTableAddColumnCommand, AlterTableDropColumnCommand, AlterTableRenameColumnCommand,
+    BeginCommand, CommitCommand, RollbackCommand,
     Expression, BinaryOp, UnaryOp, Literal, ColumnRef
 )
 from db_engine.executor import QueryExecutor
@@ -28,6 +30,8 @@ __all__ = [
     'SelectCommand', 'InsertCommand', 'UpdateCommand', 'DeleteCommand',
     'CreateTableCommand', 'CreateIndexCommand', 'DropTableCommand',
     'ExplainCommand', 'AnalyzeCommand', 'VacuumCommand',
+    'AlterTableAddColumnCommand', 'AlterTableDropColumnCommand', 'AlterTableRenameColumnCommand',
+    'BeginCommand', 'CommitCommand', 'RollbackCommand',
     'Expression', 'BinaryOp', 'UnaryOp', 'Literal', 'ColumnRef',
     'QueryExecutor',
     'REPL'
