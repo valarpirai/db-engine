@@ -31,6 +31,18 @@ python3 tests/test_executor.py     # 19/19 ✓
 python3 tests/test_phase2.py       # 18/18 ✓
 ```
 
+### Dependencies
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+```
+
+**Required packages:**
+- `click>=8.0.0` - Command-line argument parsing
+- `prompt_toolkit>=3.0.0` - Interactive REPL with readline support
+- `pygments>=2.0.0` - SQL syntax highlighting in REPL
+
 ---
 
 ## Project Overview
