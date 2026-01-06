@@ -106,10 +106,23 @@ class UtilityMixin:
 
         total_reclaimed = 0
         for table_name in tables:
+            schema = self.catalog.get_table(table_name)
             heap = self._get_heap_file(table_name)
             old_fsm = dict(heap.free_space_map)
 
             heap.vacuum()
+
+            # IMPORTANT: Rebuild all indexes since tuples moved to new ctids
+            for index_meta in self.catalog.get_indexes_for_table(table_name):
+                index = self._get_index(index_meta)
+
+                # Re-create the index file (clear it)
+                index.create()
+
+                # Re-populate from heap with new ctids
+                for tuple_obj, ctid in heap.scan_all():
+                    key = self._extract_key_from_tuple(tuple_obj, schema, index_meta.columns)
+                    index.insert(key, ctid)
 
             # Calculate reclaimed space
             new_fsm = heap.free_space_map

@@ -5,16 +5,166 @@ Provides interactive command-line interface with:
 - SQL command execution
 - Meta-commands (\dt, \di, \d table, \q)
 - Pretty table output
-- Multi-line input support
+- Multi-line input support with syntax highlighting
+- Command history with arrow keys
+- Tab completion
 - Error handling
 """
 
 import sys
 import os
 from typing import List, Any
+from pathlib import Path
+
+from prompt_toolkit import PromptSession
+from prompt_toolkit.history import FileHistory
+from prompt_toolkit.lexers import PygmentsLexer
+from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.styles import Style
+from pygments.lexer import RegexLexer, bygroups
+from pygments.token import Keyword, Name, String, Number, Operator, Punctuation, Comment, Text, Whitespace
 
 from .executor import QueryExecutor
 from .parser import parse_sql
+
+
+class SQLLexer(RegexLexer):
+    """Custom SQL lexer for syntax highlighting"""
+
+    name = 'SQL'
+    aliases = ['sql']
+
+    # SQL keywords
+    keywords = [
+        'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'DROP', 'ALTER',
+        'TABLE', 'INDEX', 'FROM', 'WHERE', 'ORDER', 'BY', 'GROUP', 'HAVING',
+        'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'ON', 'AS', 'AND', 'OR',
+        'NOT', 'NULL', 'IS', 'IN', 'BETWEEN', 'LIKE', 'LIMIT', 'OFFSET',
+        'ASC', 'DESC', 'PRIMARY', 'KEY', 'UNIQUE', 'FOREIGN', 'REFERENCES',
+        'INTO', 'VALUES', 'SET', 'BEGIN', 'COMMIT', 'ROLLBACK', 'TRANSACTION',
+        'TRUNCATE', 'EXPLAIN', 'ANALYZE', 'VACUUM', 'ADD', 'COLUMN', 'RENAME',
+        'TO', 'INT', 'BIGINT', 'FLOAT', 'TEXT', 'BOOLEAN', 'TIMESTAMP',
+        'AUTOINCREMENT'
+    ]
+
+    tokens = {
+        'root': [
+            (r'\s+', Whitespace),
+            (r'--.*$', Comment.Single),
+            (r'/\*', Comment.Multiline, 'multiline-comment'),
+            (r'(' + '|'.join(keywords) + r')\b', Keyword, 'root'),
+            (r'\\[a-z?]+', Name.Builtin),  # Meta-commands like \dt, \di
+            (r"'[^']*'", String.Single),
+            (r'"[^"]*"', String.Double),
+            (r'\d+', Number.Integer),
+            (r'[+\-*/<>=!]+', Operator),
+            (r'[(),;]', Punctuation),
+            (r'[a-zA-Z_][a-zA-Z0-9_]*', Name),
+            (r'.', Text),
+        ],
+        'multiline-comment': [
+            (r'[^*/]+', Comment.Multiline),
+            (r'/\*', Comment.Multiline, 'multiline-comment'),
+            (r'\*/', Comment.Multiline, '#pop'),
+            (r'[*/]', Comment.Multiline),
+        ],
+    }
+
+
+class SQLCompleter(Completer):
+    """Auto-completion for SQL keywords, table names, column names, and meta-commands"""
+
+    def __init__(self, executor: QueryExecutor):
+        self.executor = executor
+
+        # SQL keywords
+        self.keywords = [
+            'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'DROP', 'ALTER',
+            'TABLE', 'INDEX', 'FROM', 'WHERE', 'ORDER', 'BY', 'GROUP', 'HAVING',
+            'AND', 'OR', 'NOT', 'NULL', 'IS', 'IN', 'BETWEEN', 'LIKE', 'LIMIT',
+            'OFFSET', 'ASC', 'DESC', 'PRIMARY', 'KEY', 'UNIQUE', 'INTO', 'VALUES',
+            'SET', 'BEGIN', 'COMMIT', 'ROLLBACK', 'TRANSACTION', 'TRUNCATE',
+            'EXPLAIN', 'ANALYZE', 'VACUUM', 'ADD', 'COLUMN', 'RENAME', 'TO',
+            'INT', 'BIGINT', 'FLOAT', 'TEXT', 'BOOLEAN', 'TIMESTAMP',
+            'AUTOINCREMENT'
+        ]
+
+        # Meta-commands
+        self.meta_commands = ['\\dt', '\\di', '\\d', '\\q', '\\?']
+
+    def get_completions(self, document, complete_event):
+        """Generate completions based on current input"""
+        word = document.get_word_before_cursor()
+        text = document.text_before_cursor.upper()
+
+        # Meta-commands
+        if word.startswith('\\'):
+            for cmd in self.meta_commands:
+                if cmd.startswith(word.lower()):
+                    yield Completion(cmd, start_position=-len(word))
+            return
+
+        # SQL keywords
+        for keyword in self.keywords:
+            if keyword.startswith(word.upper()):
+                yield Completion(keyword, start_position=-len(word))
+
+        # Table names (if we have FROM, UPDATE, INSERT INTO, etc.)
+        if any(kw in text for kw in ['FROM', 'UPDATE', 'INSERT INTO', 'TABLE', 'TRUNCATE', 'ALTER']):
+            for table_name in self.executor.catalog.list_tables():
+                if table_name.upper().startswith(word.upper()):
+                    yield Completion(table_name, start_position=-len(word))
+
+        # Column names (if we have SELECT, WHERE, ORDER BY, etc.)
+        if any(kw in text for kw in ['SELECT', 'WHERE', 'ORDER BY', 'GROUP BY', 'SET']):
+            # Try to find the table name in the query
+            table_name = self._extract_table_name(text)
+            if table_name:
+                try:
+                    schema = self.executor.catalog.get_table(table_name)
+                    for col in schema.columns:
+                        if col.name.upper().startswith(word.upper()):
+                            yield Completion(col.name, start_position=-len(word))
+                except ValueError:
+                    pass
+
+    def _extract_table_name(self, text: str) -> str:
+        """Extract table name from partial SQL query"""
+        # Simple heuristic: look for FROM <table> or UPDATE <table>
+        words = text.split()
+        for i, word in enumerate(words):
+            if word in ['FROM', 'UPDATE', 'INTO', 'TABLE', 'TRUNCATE', 'ALTER'] and i + 1 < len(words):
+                return words[i + 1].strip('(),;')
+        return None
+
+
+class LimitedFileHistory(FileHistory):
+    """FileHistory with maximum entry limit"""
+
+    def __init__(self, filename: str, max_entries: int = 100):
+        super().__init__(filename)
+        self.max_entries = max_entries
+
+    def store_string(self, string: str) -> None:
+        """Store string and trim history if needed"""
+        super().store_string(string)
+        self._trim_history()
+
+    def _trim_history(self) -> None:
+        """Keep only the last max_entries in the history file"""
+        try:
+            # Read all history entries
+            if os.path.exists(self.filename):
+                with open(self.filename, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+
+                # Keep only the last max_entries
+                if len(lines) > self.max_entries:
+                    with open(self.filename, 'w', encoding='utf-8') as f:
+                        f.writelines(lines[-self.max_entries:])
+        except Exception:
+            # Silently ignore errors in trimming
+            pass
 
 
 class REPL:
@@ -23,6 +173,24 @@ class REPL:
     def __init__(self, executor: QueryExecutor):
         self.executor = executor
         self.running = False
+
+        # Setup history file with 100 entry limit
+        history_file = Path.home() / '.simpledb_history'
+        self.history = LimitedFileHistory(str(history_file), max_entries=100)
+
+        # Setup prompt session with syntax highlighting (no auto-completion)
+        self.session = PromptSession(
+            lexer=PygmentsLexer(SQLLexer),
+            history=self.history,
+            style=Style.from_dict({
+                'pygments.keyword': '#569cd6 bold',       # Blue for keywords
+                'pygments.name.builtin': '#c586c0',       # Purple for meta-commands
+                'pygments.string': '#ce9178',             # Orange for strings
+                'pygments.number': '#b5cea8',             # Light green for numbers
+                'pygments.operator': '#d4d4d4',           # White for operators
+                'pygments.comment': '#6a9955 italic',     # Green italic for comments
+            })
+        )
 
     def start(self):
         """Main command loop"""
@@ -37,6 +205,7 @@ class REPL:
         print("  \\di          - List all indexes")
         print("  \\d <table>   - Describe table schema")
         print("  \\q           - Quit")
+        print("Command history saved to: ~/.simpledb_history (max 100 entries)")
         print("=" * 60)
         print()
 
@@ -71,18 +240,26 @@ class REPL:
     def _read_command(self) -> str:
         """Read command (possibly multi-line)"""
         lines = []
-        prompt = "SimpleDB> "
 
         while True:
-            try:
-                if lines:
-                    prompt = "       -> "  # Continuation prompt
+            # Determine prompt based on whether we have partial input
+            if not lines:
+                prompt_text = 'SimpleDB> '
+            else:
+                prompt_text = '       -> '
 
-                line = input(prompt)
+            # Read a line
+            try:
+                line = self.session.prompt(prompt_text)
+
+                # If we get an empty line at the start, ignore it and continue
+                if not line.strip() and not lines:
+                    continue
+
                 lines.append(line)
 
-                # Check if command is complete (ends with semicolon or is meta-command)
-                combined = ' '.join(lines).strip()
+                # Check if command is complete
+                combined = '\n'.join(lines).strip()
                 if combined.startswith('\\') or combined.endswith(';'):
                     return combined
 

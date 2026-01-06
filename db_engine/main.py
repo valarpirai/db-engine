@@ -8,7 +8,7 @@ Example:
     python -m db_engine.main --data-dir ./mydb
 """
 
-import argparse
+import click
 import os
 import sys
 
@@ -16,67 +16,64 @@ from .executor import QueryExecutor
 from .repl import REPL
 
 
-def main():
-    """Main entry point"""
-    parser = argparse.ArgumentParser(
-        description='SimpleDB - Educational Database Engine',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Start with default data directory (./data)
-  python -m db_engine.main
+@click.command()
+@click.option(
+    '--data-dir',
+    default='./data',
+    help='Data directory for database files',
+    show_default=True
+)
+@click.option(
+    '--execute', '-e',
+    'sql_command',
+    help='Execute SQL command and exit'
+)
+@click.option(
+    '--file', '-f',
+    'sql_file',
+    type=click.Path(exists=True),
+    help='Execute SQL commands from file'
+)
+def main(data_dir, sql_command, sql_file):
+    """SimpleDB - Educational Database Engine
 
-  # Start with custom data directory
-  python -m db_engine.main --data-dir ./mydb
+    Examples:
 
-  # Execute SQL from command line
-  python -m db_engine.main --execute "SELECT * FROM users"
-        """
-    )
+      # Start interactive REPL (default)
+      python -m db_engine.main
 
-    parser.add_argument(
-        '--data-dir',
-        default='./data',
-        help='Data directory for database files (default: ./data)'
-    )
+      # Start with custom data directory
+      python -m db_engine.main --data-dir ./mydb
 
-    parser.add_argument(
-        '--execute', '-e',
-        metavar='SQL',
-        help='Execute SQL command and exit'
-    )
+      # Execute SQL from command line
+      python -m db_engine.main --execute "SELECT * FROM users"
 
-    parser.add_argument(
-        '--file', '-f',
-        metavar='FILE',
-        help='Execute SQL commands from file'
-    )
-
-    args = parser.parse_args()
-
+      # Execute SQL from file
+      python -m db_engine.main --file demo.sql
+    """
     # Create data directory if it doesn't exist
-    os.makedirs(args.data_dir, exist_ok=True)
+    os.makedirs(data_dir, exist_ok=True)
 
     # Initialize executor
     try:
-        executor = QueryExecutor(args.data_dir)
+        executor = QueryExecutor(data_dir)
     except Exception as e:
-        print(f"Error initializing database: {e}", file=sys.stderr)
-        return 1
+        click.echo(f"Error initializing database: {e}", err=True)
+        sys.exit(1)
 
     # Execute mode
-    if args.execute:
-        return execute_sql(executor, args.execute)
+    if sql_command:
+        exit_code = execute_sql(executor, sql_command)
+        sys.exit(exit_code)
 
     # File mode
-    if args.file:
-        return execute_file(executor, args.file)
+    if sql_file:
+        exit_code = execute_file(executor, sql_file)
+        sys.exit(exit_code)
 
     # Interactive REPL mode
     repl = REPL(executor)
     repl.start()
-
-    return 0
 
 
 def execute_sql(executor: QueryExecutor, sql: str) -> int:
@@ -163,4 +160,4 @@ def execute_file(executor: QueryExecutor, filename: str) -> int:
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    main()
