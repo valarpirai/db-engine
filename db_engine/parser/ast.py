@@ -123,8 +123,9 @@ class DeleteCommand:
 
 @dataclass
 class ExplainCommand:
-    """EXPLAIN query"""
+    """EXPLAIN [VERBOSE] query"""
     command: Any  # The command to explain (SELECT, UPDATE, DELETE)
+    verbose: bool = False  # If True, show detailed execution metrics
 
 
 @dataclass

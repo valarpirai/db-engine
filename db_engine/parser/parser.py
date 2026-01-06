@@ -46,6 +46,7 @@ class Tokenizer:
         'OR': TokenType.OR,
         'LIKE': TokenType.LIKE,
         'EXPLAIN': TokenType.EXPLAIN,
+        'VERBOSE': TokenType.VERBOSE,
         'ANALYZE': TokenType.ANALYZE,
         'VACUUM': TokenType.VACUUM,
         'LIMIT': TokenType.LIMIT,
@@ -855,13 +856,16 @@ class Parser:
     # ========================================================================
 
     def _parse_explain(self) -> ExplainCommand:
-        """Parse EXPLAIN statement"""
+        """Parse EXPLAIN [VERBOSE] statement"""
         self._expect(TokenType.EXPLAIN)
+
+        # Check for optional VERBOSE keyword
+        verbose = self._consume_if(TokenType.VERBOSE)
 
         # Parse the query to explain
         query = self.parse()
 
-        return ExplainCommand(query)
+        return ExplainCommand(query, verbose=verbose)
 
     def _parse_analyze(self) -> AnalyzeCommand:
         """Parse ANALYZE statement"""

@@ -13,9 +13,14 @@ class UtilityMixin:
     """Mixin class for utility command execution"""
 
     def execute_explain(self, cmd: ExplainCommand) -> str:
-        """Execute EXPLAIN command"""
+        """Execute EXPLAIN [VERBOSE] command"""
         inner_cmd = cmd.command
 
+        # VERBOSE mode: Execute with full instrumentation
+        if cmd.verbose:
+            return self._execute_explain_verbose(inner_cmd)
+
+        # Basic EXPLAIN mode
         if isinstance(inner_cmd, SelectCommand):
             plan = []
             plan.append(f"Query Plan for: SELECT from {inner_cmd.table_name}")
@@ -51,6 +56,60 @@ class UtilityMixin:
             return "\n".join(plan)
         else:
             return f"EXPLAIN not supported for {type(inner_cmd).__name__}"
+
+    def _execute_explain_verbose(self, cmd: SelectCommand) -> str:
+        """Execute query with full instrumentation and return detailed metrics"""
+        from ..instrumentation import ExecutionMetrics, Timer
+        from ..explain_formatter import ExplainFormatter
+
+        if not isinstance(cmd, SelectCommand):
+            return f"EXPLAIN VERBOSE not yet supported for {type(cmd).__name__}"
+
+        metrics = ExecutionMetrics()
+
+        # Parse time (already completed, set to 0 for now)
+        metrics.parse_time = 0.1  # Placeholder
+
+        # Planning phase
+        with Timer() as t:
+            scan_method, index_cost, seq_cost = self._plan_query_with_costs(cmd.table_name, cmd.where)
+        metrics.plan_time = t.elapsed
+        metrics.scan_method = scan_method.upper()
+        metrics.index_scan_cost = index_cost
+        metrics.sequential_scan_cost = seq_cost
+
+        # Get statistics
+        stats = self.catalog.get_statistics(cmd.table_name)
+        metrics.estimated_rows = stats.row_count
+
+        # Execute query with instrumentation
+        # For now, just execute the regular SELECT - we'll add instrumentation in next steps
+        result = self.execute_select(cmd)
+        metrics.rows_returned = len(result)
+
+        # Format output
+        formatter = ExplainFormatter()
+        return formatter.format_verbose(cmd, metrics)
+
+    def _plan_query_with_costs(self, table_name: str, where_expr) -> tuple:
+        """Plan query and return (scan_method, index_cost, seq_cost)"""
+        scan_method = self._choose_scan_method(table_name, where_expr)
+
+        # Calculate costs
+        stats = self.catalog.get_statistics(table_name)
+        seq_cost = stats.row_count * 1.0 + stats.page_count * 10.0
+
+        index_cost = 0.0
+        if scan_method == 'index':
+            # Index cost: log(N) for tree traversal + heap fetch
+            import math
+            if stats.row_count > 0:
+                tree_height = math.ceil(math.log2(stats.row_count + 1))
+                index_cost = tree_height * 1.0 + 1.5  # tree traversal + heap fetch
+            else:
+                index_cost = 1.0
+
+        return (scan_method, index_cost, seq_cost)
 
     def execute_analyze(self, cmd: AnalyzeCommand) -> str:
         """Execute ANALYZE command - update statistics"""

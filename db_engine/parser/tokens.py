@@ -36,6 +36,7 @@ class TokenType(Enum):
     OR = auto()
     LIKE = auto()
     EXPLAIN = auto()
+    VERBOSE = auto()
     ANALYZE = auto()
     VACUUM = auto()
     LIMIT = auto()
