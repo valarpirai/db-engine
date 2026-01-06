@@ -51,6 +51,11 @@ This is an educational database engine built from scratch in Python, inspired by
 
 **Philosophy**: Keep it simple. This is a learning tool, not a production database. Focus on clarity over performance, essential features over completeness.
 
+**Documentation**: For detailed technical documentation on specific modules, see the `docs/` directory:
+- [`docs/storage.md`](./docs/storage.md) - Storage layer internals
+- [`docs/parser.md`](./docs/parser.md) - SQL parser implementation
+- [`docs/executor.md`](./docs/executor.md) - Query execution engine
+
 ## Architecture
 
 ### Storage Layer
@@ -382,11 +387,28 @@ db-engine/
 │   ├── test_parser.py           # 20/20 ✓
 │   ├── test_executor.py         # 19/19 ✓
 │   └── test_phase2.py           # 18/18 ✓
+├── docs/                         # Detailed module documentation
+│   ├── executor.md              # SQL Executor Package guide
+│   ├── parser.md                # SQL Parser Package guide
+│   └── storage.md               # Storage Layer guide
 ├── demo.sql                      # Demo SQL script
-├── CLAUDE.md                     # This file
+├── requirements.txt              # Python dependencies
+├── CLAUDE.md                     # This file (source of truth)
 ├── README.md                     # User documentation
 └── LICENSE
 ```
+
+### Documentation Structure
+
+**CLAUDE.md** (this file): Complete architecture overview, implementation status, and development guide
+**docs/**: Detailed technical documentation for major components
+- **storage.md**: BufferPool, Tuple, Page, HeapFile, FSM implementation details
+- **parser.md**: Tokenizer, Parser, AST nodes, expression parsing
+- **executor.md**: Query execution, DDL/DML/utility handlers, transaction management
+
+**README.md**: User-facing quick reference and getting started guide
+
+For detailed implementation of any module, refer to `docs/<module>.md`.
 
 ## Implementation Notes
 
@@ -404,6 +426,8 @@ All system parameters centralized with all critical fixes applied:
 - Import: `from db_engine.config import PAGE_SIZE, BTREE_ORDER`
 
 ### Storage Layer (storage.py) ✅ COMPLETE - 567 lines, tested
+See [`docs/storage.md`](./docs/storage.md) for detailed storage layer documentation.
+
 **BufferPool** class: LRU page cache (128 pages)
   - `get_page(file, page_num)`: Returns cached or loads from disk (cache hits tracked)
   - `mark_dirty(file, page_num)`: Mark page as modified
@@ -479,7 +503,7 @@ All system parameters centralized with all critical fixes applied:
   - `list_tables()`, `list_indexes()`: Listing methods
 
 ### Parser Package (db_engine/parser/)
-**Modular structure for SQL parsing:**
+**Modular structure for SQL parsing** (see [`docs/parser.md`](./docs/parser.md) for detailed documentation):
 
 - **tokens.py** (105 lines): Token definitions
   - `TokenType` enum: 58 token types (keywords, operators, literals)
@@ -500,7 +524,7 @@ All system parameters centralized with all critical fixes applied:
 - Detailed error messages with line/column numbers
 
 ### Executor Package (db_engine/executor/)
-**Modular structure using mixin pattern:**
+**Modular structure using mixin pattern** (see [`docs/executor.md`](./docs/executor.md) for detailed documentation):
 
 - **base.py** (208 lines): Core functionality
   - `ExecutorBase`: Base class with state (catalog, buffer_pool, heap_files, indexes)
