@@ -238,35 +238,99 @@ class BTreeIndex:
             f.write(struct.pack('q', self.root.file_offset))
             f.write(struct.pack('q', self.node_count))
 
-    def search(self, key: Any) -> Optional[TupleType[int, int]]:
+    def search(self, key: Any, metrics=None) -> Optional[TupleType[int, int]]:
         """
         Search for exact key match
         Returns: ctid (page_number, offset) or None if not found
+
+        Args:
+            key: The key to search for
+            metrics: Optional ExecutionMetrics object to track search details
         """
         if self.root is None:
             return None
 
         key = BTreeNode.truncate_key(key)
-        return self._search_node(self.root, key)
 
-    def _search_node(self, node: BTreeNode, key: Any) -> Optional[TupleType[int, int]]:
-        """Recursive search in node"""
+        # Track tree depth if metrics provided
+        if metrics:
+            metrics.btree_depth = self._calculate_tree_depth(self.root)
+
+        return self._search_node(self.root, key, metrics, depth=0)
+
+    def _search_node(self, node: BTreeNode, key: Any, metrics=None, depth=0) -> Optional[TupleType[int, int]]:
+        """Recursive search in node with optional instrumentation"""
+        from .instrumentation import BTreeNodeVisit
+
+        # Track node visit if metrics provided
+        comparison_result = None
+        found = False
+
         # Find position where key would be
         i = 0
+        comparisons_made = 0
         while i < len(node.keys):
             cmp = BTreeNode.compare_keys(key, node.keys[i])
+            comparisons_made += 1
+
             if cmp == 0:
                 # Found exact match
                 if node.is_leaf:
+                    found = True
+                    comparison_result = f"Comparison: {key} == {node.keys[i]} → found at position {i}"
+
+                    if metrics:
+                        visit = BTreeNodeVisit(
+                            offset=node.file_offset,
+                            is_leaf=node.is_leaf,
+                            keys=node.keys[:],
+                            comparison_result=comparison_result,
+                            found=True
+                        )
+                        metrics.btree_nodes_visited.append(visit)
+                        metrics.btree_comparisons += comparisons_made
+
                     return node.values[i]  # Return ctid
                 else:
                     # In internal node, search right subtree
+                    comparison_result = f"Comparison: {key} == {node.keys[i]} → follow right subtree"
+
+                    if metrics:
+                        visit = BTreeNodeVisit(
+                            offset=node.file_offset,
+                            is_leaf=node.is_leaf,
+                            keys=node.keys[:],
+                            comparison_result=comparison_result,
+                            found=False
+                        )
+                        metrics.btree_nodes_visited.append(visit)
+                        metrics.btree_comparisons += comparisons_made
+
                     child_offset = node.values[i + 1]
                     child = self._read_node(child_offset)
-                    return self._search_node(child, key)
+                    return self._search_node(child, key, metrics, depth + 1)
             elif cmp < 0:
+                comparison_result = f"Comparison: {key} < {node.keys[i]} → follow left"
                 break
             i += 1
+
+        # If we exited the loop without finding
+        if comparison_result is None and i > 0:
+            comparison_result = f"Comparison: {key} > {node.keys[-1]} → follow right"
+        elif comparison_result is None:
+            comparison_result = "Empty node or key less than all keys → follow left"
+
+        # Track this node visit
+        if metrics:
+            visit = BTreeNodeVisit(
+                offset=node.file_offset,
+                is_leaf=node.is_leaf,
+                keys=node.keys[:],
+                comparison_result=comparison_result,
+                found=False
+            )
+            metrics.btree_nodes_visited.append(visit)
+            metrics.btree_comparisons += comparisons_made
 
         # Key not found at this level
         if node.is_leaf:
@@ -275,7 +339,18 @@ class BTreeIndex:
             # Search in appropriate child
             child_offset = node.values[i]
             child = self._read_node(child_offset)
-            return self._search_node(child, key)
+            return self._search_node(child, key, metrics, depth + 1)
+
+    def _calculate_tree_depth(self, node: BTreeNode) -> int:
+        """Calculate the depth of the B-tree"""
+        if node is None:
+            return 0
+        if node.is_leaf:
+            return 1
+        # Follow first child to calculate depth
+        child_offset = node.values[0]
+        child = self._read_node(child_offset)
+        return 1 + self._calculate_tree_depth(child)
 
     def insert(self, key: Any, ctid: TupleType[int, int]):
         """

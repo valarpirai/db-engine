@@ -133,9 +133,17 @@ DROP INDEX idx_users_age ON users;
 TRUNCATE TABLE users;
 TRUNCATE users;  -- TABLE keyword optional
 
--- EXPLAIN (query plan inspection - Phase 1)
+-- EXPLAIN (query plan inspection)
 EXPLAIN SELECT * FROM users WHERE age > 18;
 -- Output: shows scan method (index/sequential), estimated rows, etc.
+
+-- EXPLAIN VERBOSE (detailed execution analysis) ✅ NEW
+EXPLAIN VERBOSE SELECT * FROM users WHERE id = 1;
+-- Output: detailed execution metrics including:
+--   - Parsing phase: AST structure, parse time
+--   - Query planning: cost analysis (index vs sequential scan)
+--   - Execution phases: index lookup, heap access, filtering, sorting
+--   - Summary: timing breakdown, buffer pool stats, row statistics
 
 -- VACUUM (garbage collection - Phase 1)
 VACUUM users;  -- Reclaim space from deleted tuples
@@ -336,19 +344,21 @@ db-engine/
 │   ├── catalog.py               # Metadata system (281 lines)
 │   ├── storage.py               # Tuple, Page, HeapFile, BufferPool (577 lines)
 │   ├── btree.py                 # B-tree index (479 lines)
-│   ├── repl.py                  # Interactive shell (290 lines)
-│   ├── main.py                  # Entry point (166 lines)
+│   ├── repl.py                  # Interactive shell (457 lines)
+│   ├── main.py                  # Entry point (163 lines)
+│   ├── instrumentation.py       # Execution metrics tracking (100 lines) ✅ NEW
+│   ├── explain_formatter.py    # EXPLAIN VERBOSE output formatter (335 lines) ✅ NEW
 │   ├── parser/                  # SQL Parser Package
 │   │   ├── __init__.py          # Re-exports for backward compatibility
-│   │   ├── tokens.py            # TokenType enum, Token class (105 lines)
-│   │   ├── ast.py               # Expression & Command classes (169 lines)
-│   │   └── parser.py            # Tokenizer & Parser (994 lines)
+│   │   ├── tokens.py            # TokenType enum, Token class (106 lines)
+│   │   ├── ast.py               # Expression & Command classes (170 lines)
+│   │   └── parser.py            # Tokenizer & Parser (995 lines)
 │   └── executor/                # Query Executor Package
 │       ├── __init__.py          # Re-exports QueryExecutor
 │       ├── base.py              # Helpers, expression evaluation (208 lines)
 │       ├── ddl.py               # CREATE/DROP handlers (92 lines)
 │       ├── dml.py               # INSERT/SELECT/UPDATE/DELETE (292 lines)
-│       ├── utility.py           # EXPLAIN/ANALYZE/VACUUM (123 lines)
+│       ├── utility.py           # EXPLAIN/ANALYZE/VACUUM (213 lines)
 │       ├── schema.py            # ALTER TABLE handlers (281 lines)
 │       ├── transaction.py       # BEGIN/COMMIT/ROLLBACK (88 lines)
 │       └── executor.py          # Main QueryExecutor class (82 lines)

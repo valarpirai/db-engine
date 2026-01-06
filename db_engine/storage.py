@@ -462,12 +462,43 @@ class HeapFile:
 
         return (page_num, offset)
 
-    def read_tuple(self, ctid: TupleType[int, int]) -> Optional[Tuple]:
-        """Read tuple by ctid (page_number, offset)"""
+    def read_tuple(self, ctid: TupleType[int, int], metrics=None) -> Optional[Tuple]:
+        """
+        Read tuple by ctid (page_number, offset)
+
+        Args:
+            ctid: Tuple identifier (page_number, offset)
+            metrics: Optional ExecutionMetrics object to track access details
+        """
         page_num, offset = ctid
+
+        # Check if page is in buffer pool (for metrics)
+        cache_hit = False
+        if metrics:
+            # Check if page is already cached
+            cache_key = f"{self.file_path}_{page_num}"
+            cache_hit = cache_key in self.buffer_pool.cache
 
         # Load page (through buffer pool for caching)
         page = self._read_page(page_num)
+
+        # Track page access if metrics provided
+        if metrics:
+            from .instrumentation import PageAccess
+            total_tuples = len(page.tuples)
+            page_access = PageAccess(
+                page_num=page_num,
+                cache_hit=cache_hit,
+                free_space=page.free_space,
+                live_tuples=total_tuples - page.dead_tuple_count,
+                dead_tuples=page.dead_tuple_count
+            )
+            metrics.pages_accessed.append(page_access)
+
+            if cache_hit:
+                metrics.buffer_pool_hits += 1
+            else:
+                metrics.buffer_pool_misses += 1
 
         # Get tuple data
         tuple_data = page.get_tuple(offset)
@@ -475,7 +506,53 @@ class HeapFile:
             return None  # Deleted or not found
 
         # Deserialize
-        return Tuple.deserialize(tuple_data, self.schema)
+        tuple_obj = Tuple.deserialize(tuple_data, self.schema)
+
+        # Track tuple details if metrics provided
+        if metrics and tuple_obj:
+            from .instrumentation import TupleDetails
+            import struct
+
+            # Calculate sizes
+            header_size = 8  # xmin, xmax, ctid
+            null_bitmap_size = 0
+            if self.schema.has_nullable_columns():
+                null_bitmap_size = (len([c for c in self.schema.columns if c.nullable]) + 7) // 8
+
+            data_size = len(tuple_data) - header_size - null_bitmap_size
+
+            # Calculate column sizes
+            column_sizes = {}
+            for i, col in enumerate(self.schema.columns):
+                val = tuple_obj.values[i]
+                if val is None:
+                    column_sizes[col.name] = 0
+                elif col.datatype == 'INT':
+                    column_sizes[col.name] = 4
+                elif col.datatype == 'BIGINT' or col.datatype == 'TIMESTAMP':
+                    column_sizes[col.name] = 8
+                elif col.datatype == 'FLOAT':
+                    column_sizes[col.name] = 8
+                elif col.datatype == 'BOOLEAN':
+                    column_sizes[col.name] = 1
+                elif col.datatype == 'TEXT':
+                    column_sizes[col.name] = len(val.encode('utf-8')) if val else 0
+                else:
+                    column_sizes[col.name] = 0
+
+            tuple_details = TupleDetails(
+                ctid=ctid,
+                offset_in_page=offset,
+                header_size=header_size,
+                null_bitmap_size=null_bitmap_size,
+                data_size=data_size,
+                total_size=len(tuple_data),
+                column_sizes=column_sizes
+            )
+            metrics.tuples_fetched.append(tuple_details)
+            metrics.memory_used += len(tuple_data)
+
+        return tuple_obj
 
     def delete_tuple(self, ctid: TupleType[int, int]):
         """Mark tuple as deleted (tombstone)"""

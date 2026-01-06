@@ -82,9 +82,8 @@ class UtilityMixin:
         stats = self.catalog.get_statistics(cmd.table_name)
         metrics.estimated_rows = stats.row_count
 
-        # Execute query with instrumentation
-        # For now, just execute the regular SELECT - we'll add instrumentation in next steps
-        result = self.execute_select(cmd)
+        # Execute query with full instrumentation
+        result = self._execute_select_instrumented(cmd, metrics)
         metrics.rows_returned = len(result)
 
         # Format output
@@ -110,6 +109,99 @@ class UtilityMixin:
                 index_cost = 1.0
 
         return (scan_method, index_cost, seq_cost)
+
+    def _execute_select_instrumented(self, cmd: SelectCommand, metrics: 'ExecutionMetrics'):
+        """Execute SELECT with full instrumentation"""
+        from ..instrumentation import Timer
+        from ..parser.ast import BinaryOp, ColumnRef
+
+        schema = self.catalog.get_table(cmd.table_name)
+
+        # Decide scan method
+        scan_method = self._choose_scan_method(cmd.table_name, cmd.where)
+
+        # Get tuples with instrumentation
+        if scan_method == 'index':
+            with Timer() as t:
+                tuples_with_ctids = list(self._index_scan_instrumented(cmd.table_name, cmd.where, metrics))
+            metrics.index_lookup_time = t.elapsed
+        else:
+            with Timer() as t:
+                heap = self._get_heap_file(cmd.table_name)
+                tuples_with_ctids = [(t, ctid) for t, ctid in heap.scan_all()]
+            metrics.heap_access_time = t.elapsed
+
+        metrics.rows_scanned = len(tuples_with_ctids)
+
+        # Filter with WHERE clause
+        with Timer() as t:
+            filtered = []
+            for tuple_obj, ctid in tuples_with_ctids:
+                if cmd.where is None or self._evaluate_expression(cmd.where, tuple_obj, schema):
+                    filtered.append(tuple_obj)
+        metrics.filter_time = t.elapsed
+        metrics.rows_filtered = len(filtered)
+
+        # Apply ORDER BY
+        if cmd.order_by:
+            with Timer() as t:
+                filtered = self._apply_order_by(filtered, schema, cmd.order_by)
+            metrics.sort_time = t.elapsed
+
+        # Apply LIMIT and OFFSET
+        if cmd.offset:
+            filtered = filtered[cmd.offset:]
+        if cmd.limit:
+            filtered = filtered[:cmd.limit]
+
+        # Project columns
+        with Timer() as t:
+            results = []
+            if cmd.columns == ['*']:
+                for tuple_obj in filtered:
+                    results.append(tuple(tuple_obj.values))
+            else:
+                col_indexes = [schema.get_column_index(col) for col in cmd.columns]
+                for tuple_obj in filtered:
+                    row = tuple(tuple_obj.values[i] for i in col_indexes)
+                    results.append(row)
+        metrics.projection_time = t.elapsed
+
+        return results
+
+    def _index_scan_instrumented(self, table_name: str, where_expr, metrics):
+        """Use index to find matching tuples with instrumentation"""
+        from ..parser.ast import BinaryOp, ColumnRef
+
+        if isinstance(where_expr, BinaryOp):
+            if where_expr.op == '=' and isinstance(where_expr.left, ColumnRef):
+                col_name = where_expr.left.column_name
+                value = self._literal_value(where_expr.right)
+
+                # Find index on this column
+                for index_meta in self.catalog.get_indexes_for_table(table_name):
+                    if col_name in index_meta.columns:
+                        metrics.index_used = index_meta.index_file
+
+                        index = self._get_index(index_meta)
+
+                        # Search with metrics
+                        ctid = index.search(value, metrics=metrics)
+
+                        if ctid:
+                            heap = self._get_heap_file(table_name)
+
+                            # Read tuple with metrics
+                            tuple_obj = heap.read_tuple(ctid, metrics=metrics)
+
+                            if tuple_obj:
+                                yield (tuple_obj, ctid)
+                        return
+
+        # Fallback to sequential scan
+        heap = self._get_heap_file(table_name)
+        for tuple_obj, ctid in heap.scan_all():
+            yield (tuple_obj, ctid)
 
     def execute_analyze(self, cmd: AnalyzeCommand) -> str:
         """Execute ANALYZE command - update statistics"""
