@@ -12,6 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - ✅ **Full SQL support** including ALTER TABLE and transactions
 - ✅ **Interactive REPL** with meta-commands
 - ✅ **Complete documentation** (README.md, demo.sql)
+- ⚠️ **Single-user only** - No file locking (concurrent writes unsafe)
 
 ### Quick Start
 ```bash
@@ -213,13 +214,14 @@ ROLLBACK;  -- Discard changes
 - **Pagination**: LIMIT and OFFSET support
 - **Query introspection**: EXPLAIN command shows query plan and cost estimates
 
-### Transaction Model (Phase 2 - Future)
+### Transaction Model (Phase 2 - Implemented)
 - **Phase 1**: Auto-commit all operations (no explicit transactions)
-- **Phase 2** will add:
-  - BEGIN/COMMIT/ROLLBACK commands
-  - File locking for single-writer enforcement (fcntl on POSIX)
-  - Transaction log for rollback support
-  - No MVCC initially - simple read/write locks
+- **Phase 2** (Implemented):
+  - ✅ BEGIN/COMMIT/ROLLBACK commands
+  - ✅ Index backup/restore for rollback
+  - ❌ File locking (NOT IMPLEMENTED - single-user only, concurrent writes unsafe)
+  - ❌ Transaction log/WAL (NOT IMPLEMENTED - rollback via index restore)
+  - ❌ MVCC (NOT IMPLEMENTED - READ UNCOMMITTED isolation level)
 
 ### REPL Interface
 - Command-line interactive shell with readline support
@@ -260,9 +262,9 @@ Supported types:
 
 3. **ctid-based indexing**: Indexes point to heap via (block, offset), not row data
 
-4. **No WAL initially**: Durability sacrificed for simplicity
+4. **No WAL**: Durability sacrificed for simplicity (no crash recovery)
 
-5. **Single writer**: File locking prevents concurrent writes
+5. **Single-user design**: ❌ No file locking implemented - concurrent writes can corrupt data
 
 6. **Uniqueness via B-tree**: Primary keys enforce uniqueness during insertion
 
@@ -293,11 +295,7 @@ Supported types:
    - Tables with no nullable columns skip bitmap entirely
    - Saves space for NOT NULL tables
 
-14. **Concurrent reads**: Multiple readers allowed, single writer
-   - Read/write locks using fcntl
-   - Better concurrency than full table locking
-
-15. **Vacuum for space reclamation**: VACUUM command in Phase 1
+14. **Vacuum for space reclamation**: VACUUM command in Phase 1
    - Reclaims space from deleted tuples
    - Auto-vacuum when 20% of tuples are dead
    - Prevents table bloat
@@ -313,12 +311,13 @@ mydb/
 ├── users_pkey.idx           # Primary key index on users(id)
 ├── users_age_idx.idx        # Secondary index on users(age)
 ├── orders.dat               # Heap file for 'orders' table
-├── orders_pkey.idx          # Primary key index on orders(id)
-└── .lock                    # Lock file for single-writer enforcement
+└── orders_pkey.idx          # Primary key index on orders(id)
 ```
 
 Each `.dat` file contains 8KB pages with table rows.
 Each `.idx` file contains B-tree nodes with (key → ctid) mappings.
+
+**Note**: No file locking - concurrent writes can corrupt database files. Single-user only.
 
 ## Development Commands
 
@@ -346,7 +345,7 @@ python3 -c "from db_engine import Catalog, BufferPool, Tuple; print('Import succ
 rm -rf test_data test_data_storage
 
 # Clean database files
-rm -rf data/*.dat data/*.idx data/.lock data/catalog.dat
+rm -rf data/*.dat data/*.idx data/catalog.dat
 ```
 
 ## File Organization
@@ -421,8 +420,8 @@ All system parameters centralized with all critical fixes applied:
 - Tuple limits: `MAX_TUPLE_SIZE` (65KB)
 - Statistics: `STATS_AUTO_UPDATE_THRESHOLD` (1000 ops)
 - Vacuum: `AUTO_VACUUM_THRESHOLD` (20%), `VACUUM_ENABLED` (True)
-- Concurrency: `CONCURRENT_READS_ENABLED` (True)
 - Parser: `PARSER_DETAILED_ERRORS` (True)
+- Lock file: `LOCK_FILE` ('.lock') - defined but NOT USED (no file locking implemented)
 - Import: `from db_engine.config import PAGE_SIZE, BTREE_ORDER`
 
 ### Storage Layer (storage.py) ✅ COMPLETE - 567 lines, tested
@@ -574,14 +573,18 @@ See [`docs/storage.md`](./docs/storage.md) for detailed storage layer documentat
 - FOREIGN KEY constraints
 - Advanced query optimization (partial index scans, hash joins, etc.)
 
-### Phase 2 Features (Added After Core Works):
-- ALTER TABLE (add/drop/rename columns)
-- Explicit transactions (BEGIN/COMMIT/ROLLBACK)
-- More data types (DATE, TIME, JSON, etc.)
+### Phase 2 Features:
+- ✅ **ALTER TABLE** (add/drop/rename columns) - IMPLEMENTED
+- ✅ **Explicit transactions** (BEGIN/COMMIT/ROLLBACK) - IMPLEMENTED
+- ❌ **File locking** (concurrent write protection) - NOT IMPLEMENTED
+- ❌ **Transaction log/WAL** (crash recovery) - NOT IMPLEMENTED
+- ❌ **More data types** (DATE, TIME, JSON, etc.) - NOT IMPLEMENTED
 
 ## Implementation Status
 
-### ✅ All Phases Complete!
+### ✅ Core Implementation Complete (with Known Limitations)
+
+**Summary**: All core features implemented and tested. Phase 2 partially complete (ALTER TABLE + Transactions working, file locking not implemented).
 
 ### Phase 1: Core Foundation ✅ (COMPLETE)
 All components built and thoroughly tested:
@@ -643,6 +646,19 @@ Interactive components built on tested foundation:
     - Transaction tests: 8/8 passing
 
 **Result**: All Phase 2 features fully functional, all tests passing.
+
+### Known Limitations & Missing Features
+
+**Critical Limitations**:
+1. ❌ **No file locking** - Concurrent writes can corrupt database files (single-user only)
+2. ❌ **No transaction log/WAL** - No crash recovery, rollback via index restore only
+3. ❌ **READ UNCOMMITTED isolation** - No MVCC, weak transaction isolation
+
+**Missing Phase 2 Features**:
+1. ❌ **UPDATE with expressions** - Cannot use `SET age = age + 1` (documented but not implemented)
+2. ❌ **Additional data types** - No DATE, TIME, JSON support
+
+**See [`MISSING_FEATURES.md`](./MISSING_FEATURES.md) for detailed analysis of implementation gaps.**
 
 ## Testing Strategy & Results
 
